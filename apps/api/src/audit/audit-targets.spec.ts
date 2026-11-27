@@ -16,6 +16,7 @@ import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 
 describe('audit targets at HTTP boundaries', () => {
+  const originalAsyncWrites = process.env.AUDIT_ASYNC_WRITES_ENABLED
   let app: INestApplication
   let base: string
   let box: Box
@@ -25,6 +26,7 @@ describe('audit targets at HTTP boundaries', () => {
   let createFromCheckpoint: jest.Mock
 
   beforeEach(async () => {
+    process.env.AUDIT_ASYNC_WRITES_ENABLED = 'false'
     box = new Box('us', 'friendly-name')
     box.state = BoxState.STOPPED
     box.desiredState = BoxDesiredState.STOPPED
@@ -72,6 +74,8 @@ describe('audit targets at HTTP boundaries', () => {
   })
 
   afterEach(async () => {
+    if (originalAsyncWrites === undefined) delete process.env.AUDIT_ASYNC_WRITES_ENABLED
+    else process.env.AUDIT_ASYNC_WRITES_ENABLED = originalAsyncWrites
     await app?.close()
   })
 

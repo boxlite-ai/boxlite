@@ -12,6 +12,7 @@ import { Box } from '../box/entities/box.entity'
 import { Runner } from '../box/entities/runner.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
+import { TypedConfigService } from '../config/typed-config.service'
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
 import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
@@ -78,7 +79,12 @@ describe('UsageModule', () => {
     const providers = Reflect.getMetadata(MODULE_METADATA.PROVIDERS, UsageModule) as Array<any>
     const boxRepositoryProvider = providers.find((provider) => provider?.provide === BoxRepository)
 
-    expect(boxRepositoryProvider.inject).toEqual([DataSource, EventEmitter2, BoxLookupCacheInvalidationService])
+    expect(boxRepositoryProvider.inject).toEqual([
+      DataSource,
+      EventEmitter2,
+      BoxLookupCacheInvalidationService,
+      TypedConfigService,
+    ])
     expect(boxRepositoryProvider.inject).toHaveLength(BoxRepository.length)
   })
 })

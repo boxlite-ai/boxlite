@@ -27,6 +27,7 @@ import { RegionEvents } from '../constants/region-events.constant'
 import { RegionCreatedEvent } from '../events/region-created.event'
 import { RegionDeletedEvent } from '../events/region-deleted.event'
 import { UpdateRegionDto } from '../dto/update-region.dto'
+import { isEnableApiModuleCache } from '../../common/utils/api-module-cache.util'
 
 @Injectable()
 export class RegionService {
@@ -100,15 +101,16 @@ export class RegionService {
    * @param id - The ID of the region.
    * @returns The region if found, or null otherwise.
    */
-  async findOne(id: string, cache = false): Promise<Region | null> {
+  async findOne(id: string, cache?: boolean): Promise<Region | null> {
+    const cacheEnabled = cache ?? isEnableApiModuleCache(this.configService.get('apiModuleCache.enabled'))
     return await this.regionRepository.findOne({
       where: {
         id,
       },
-      cache: cache
+      cache: cacheEnabled
         ? {
             id: `region:${id}`,
-            milliseconds: 30000,
+            milliseconds: cache === true ? 30000 : 60000,
           }
         : undefined,
     })

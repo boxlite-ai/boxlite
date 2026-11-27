@@ -576,11 +576,16 @@ export class BoxliteProxyController {
 
     opts?.admit?.(box, boxId)
 
-    if (policy.autoResume && box.autoResume) {
-      await this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit)
-    }
-
-    const runner = await this.runnerService.findOne(box.runnerId)
+    const resume =
+      policy.autoResume && box.autoResume
+        ? opts?.operation === 'box.exec'
+          ? this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit, box)
+          : this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit)
+        : Promise.resolve()
+    const [resumeResult, runnerResult] = await Promise.allSettled([resume, this.runnerService.findOne(box.runnerId)])
+    if (resumeResult.status === 'rejected') throw resumeResult.reason
+    if (runnerResult.status === 'rejected') throw runnerResult.reason
+    const runner = runnerResult.value
     if (!runner) {
       throw new NotFoundException(`Runner for box ${boxId} not found`)
     }

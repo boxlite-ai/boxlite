@@ -41,7 +41,7 @@ import { RunnerContext } from '../../common/interfaces/runner-context.interface'
 import { BoxState } from '../enums/box-state.enum'
 import { Box } from '../entities/box.entity'
 import { ContentTypeInterceptor } from '../../common/interceptors/content-type.interceptors'
-import { BoxAccessGuard } from '../guards/box-access.guard'
+import { BoxAccessGuard, BOX_ACCESS_SNAPSHOT } from '../guards/box-access.guard'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { AuthContext } from '../../common/decorators/auth-context.decorator'
 import { UserContext } from '../../common/decorators/user-context.decorator'
@@ -308,7 +308,11 @@ export class BoxController {
   })
   @UseGuards(RunnerAuthGuard)
   @UseGuards(BoxAccessGuard)
-  async updateBoxState(@Param('boxId') boxId: string, @Body() updateStateDto: UpdateBoxStateDto): Promise<void> {
+  async updateBoxState(
+    @Param('boxId') boxId: string,
+    @Body() updateStateDto: UpdateBoxStateDto,
+    @Req() request: Request,
+  ): Promise<void> {
     await this.boxService.updateState(
       boxId,
       updateStateDto.state,
@@ -320,6 +324,7 @@ export class BoxController {
       updateStateDto.imageDigest !== undefined
         ? { digest: updateStateDto.imageDigest, sizeBytes: updateStateDto.imageSizeBytes ?? 0 }
         : undefined,
+      request[BOX_ACCESS_SNAPSHOT],
     )
   }
 

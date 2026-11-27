@@ -459,57 +459,37 @@ export class JobService {
    * This prevents duplicate processing of the same job
    */
   private async claimPendingJobs(runnerId: string, limit: number): Promise<JobDto[]> {
-    // Find pending jobs
-    const jobs = await this.jobRepository.find({
-      where: {
-        runnerId,
-        status: JobStatus.PENDING,
-      },
-      order: {
-        createdAt: 'ASC',
-      },
-      take: limit,
-    })
-
-    if (jobs.length === 0) {
-      return []
-    }
-
     const now = new Date()
-    // A single conditional UPDATE prevents a later-row error from leaving
-    // earlier claims committed. The status predicate retains the compare-and-swap,
-    // so a concurrent poll may still win a subset of these candidates.
-    const claim = await this.jobRepository.update(
-      {
-        id: In(jobs.map((job) => job.id)),
-        status: JobStatus.PENDING,
-      },
-      {
-        status: JobStatus.IN_PROGRESS,
-        startedAt: now,
-        updatedAt: now,
-      },
-      { returning: ['id'] },
-    )
-    const claimedIds = new Set((claim.raw as Array<Pick<Job, 'id'>>).map((row) => row.id))
-    const claimedJobs: JobDto[] = []
+    const rows = (await this.jobRepository.query(
+      `WITH candidates AS (
+         SELECT id
+         FROM job
+         WHERE "runnerId"=$1 AND status='PENDING'
+         ORDER BY "createdAt" ASC, id ASC
+         LIMIT $2
+         FOR UPDATE SKIP LOCKED
+       ), claimed AS (
+         UPDATE job AS j
+         SET status='IN_PROGRESS',
+             "startedAt"=$3,
+             "updatedAt"=$3,
+             version=j.version+1
+         WHERE j.id IN (SELECT id FROM candidates)
+           AND j.status='PENDING'
+         RETURNING j.*
+       )
+       SELECT * FROM claimed
+       ORDER BY "createdAt" ASC, id ASC`,
+      [runnerId, limit, now],
+    )) as Job[]
 
-    for (const job of jobs) {
-      if (!claimedIds.has(job.id)) {
-        this.logger.debug(`Job ${job.id} was already claimed by a concurrent poll`)
-        continue
-      }
-
-      job.status = JobStatus.IN_PROGRESS
-      job.startedAt = now
-      job.updatedAt = now
-      claimedJobs.push(new JobDto(job))
-    }
-
+    const claimedJobs = rows.map((row) => {
+      const job = Object.assign(Object.create(Job.prototype) as Job, row)
+      return new JobDto(job)
+    })
     if (claimedJobs.length > 0) {
       this.logger.debug(`Claimed ${claimedJobs.length} existing pending jobs for runner ${runnerId}`)
     }
-
     return claimedJobs
   }
 }

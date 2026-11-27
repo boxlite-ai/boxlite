@@ -3,91 +3,103 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { In } from 'typeorm'
 import { Job } from '../entities/job.entity'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { JobService } from './job.service'
 
-function makePendingJob(id: string): Job {
+function makeClaimedRow(id: string): Job {
   return {
     id,
     runnerId: 'runner-1',
     resourceType: ResourceType.BOX,
     resourceId: `box-${id}`,
     type: JobType.CREATE_BOX,
-    status: JobStatus.PENDING,
-    startedAt: null,
+    status: JobStatus.IN_PROGRESS,
+    payload: JSON.stringify({ image: 'alpine:latest' }),
+    traceContext: { traceparent: '00-trace-01' },
+    startedAt: new Date('2026-07-30T04:00:01.000Z'),
     completedAt: null,
     createdAt: new Date('2026-07-30T04:00:00.000Z'),
-    updatedAt: new Date('2026-07-30T04:00:00.000Z'),
+    updatedAt: new Date('2026-07-30T04:00:01.000Z'),
+    version: 2,
   } as unknown as Job
 }
 
-function makeService(pendingJobs: Job[], claimMatches: (id: string) => boolean) {
+function makeService(rows: Job[]) {
   const jobRepository = {
-    find: jest.fn().mockResolvedValue(pendingJobs),
-    update: jest.fn(async () => ({
-      affected: pendingJobs.filter((job) => claimMatches(job.id)).length,
-      raw: pendingJobs.filter((job) => claimMatches(job.id)).map((job) => ({ id: job.id })),
-    })),
+    query: jest.fn().mockResolvedValue(rows),
+    find: jest.fn().mockResolvedValue(rows),
+    update: jest.fn().mockResolvedValue({ raw: rows.map(({ id }) => ({ id })) }),
     create: jest.fn((row: Job) => row),
-    save: jest.fn(),
   }
 
   const service = new JobService(jobRepository as any, {} as any, {} as any)
   return { service, jobRepository }
 }
 
-// claimPendingJobs is private; poll routing is exercised elsewhere.
 function claimPendingJobs(service: JobService, runnerId: string, limit: number) {
   return (service as any).claimPendingJobs(runnerId, limit) as Promise<Array<{ id: string; status: JobStatus }>>
 }
 
 describe('JobService.claimPendingJobs', () => {
-  it('does not reconstruct a returned database row through the entity constructor', async () => {
-    const jobs = [makePendingJob('job-1')]
-    const { service, jobRepository } = makeService(jobs, () => true)
-
-    // EntityManager.create() invokes `new Job()` without arguments even when
-    // entitySkipConstructor is enabled for database deserialization. Job's
-    // constructor requires params, so claim must reuse the entity read above.
-    jobRepository.create.mockImplementation(() => new (Job as any)())
+  it('claims and returns jobs in one database statement with row locks and a status guard', async () => {
+    const { service, jobRepository } = makeService([makeClaimedRow('job-1')])
 
     await expect(claimPendingJobs(service, 'runner-1', 10)).resolves.toEqual([
       expect.objectContaining({ id: 'job-1', status: JobStatus.IN_PROGRESS }),
     ])
-    expect(jobRepository.create).not.toHaveBeenCalled()
+
+    expect(jobRepository.query).toHaveBeenCalledTimes(1)
+    const [sql, params] = jobRepository.query.mock.calls[0]
+    expect(sql).toContain('FOR UPDATE SKIP LOCKED')
+    expect(sql).toContain("status='PENDING'")
+    expect(sql).toContain('version=j.version+1')
+    expect(sql).toContain('RETURNING j.*')
+    expect(params).toEqual(['runner-1', 10, expect.any(Date)])
+    expect(jobRepository.find).not.toHaveBeenCalled()
+    expect(jobRepository.update).not.toHaveBeenCalled()
   })
 
-  it('claims each job with a status predicate so a concurrent poll cannot claim it twice', async () => {
-    const jobs = [makePendingJob('job-1')]
-    const { service, jobRepository } = makeService(jobs, () => true)
+  it('maps raw timestamp, JSON and payload fields without invoking the entity constructor', async () => {
+    const rows = [makeClaimedRow('job-1')]
+    const { service, jobRepository } = makeService(rows)
+    jobRepository.create.mockImplementation(() => new (Job as any)())
 
-    const claimed = await claimPendingJobs(service, 'runner-1', 10)
+    const [claimed] = await claimPendingJobs(service, 'runner-1', 10)
 
-    expect(claimed).toHaveLength(1)
-    expect(claimed[0].status).toBe(JobStatus.IN_PROGRESS)
-
-    expect(jobRepository.update).toHaveBeenCalledWith(
-      { id: In(['job-1']), status: JobStatus.PENDING },
-      expect.objectContaining({ status: JobStatus.IN_PROGRESS }),
-      { returning: ['id'] },
+    expect(claimed).toEqual(
+      expect.objectContaining({
+        id: 'job-1',
+        createdAt: '2026-07-30T04:00:00.000Z',
+        updatedAt: '2026-07-30T04:00:01.000Z',
+        payload: JSON.stringify({ image: 'alpine:latest' }),
+        traceContext: { traceparent: '00-trace-01' },
+      }),
     )
+    expect(jobRepository.create).not.toHaveBeenCalled()
+    expect(jobRepository.query).toHaveBeenCalledTimes(1)
   })
 
-  it('skips a job another poll already claimed instead of handing it out again', async () => {
-    const jobs = [makePendingJob('job-taken'), makePendingJob('job-free')]
-    const { service } = makeService(jobs, (id) => id === 'job-free')
+  it('preserves the order returned by the ordered claim statement', async () => {
+    const { service, jobRepository } = makeService([makeClaimedRow('job-first'), makeClaimedRow('job-second')])
 
     const claimed = await claimPendingJobs(service, 'runner-1', 10)
 
-    expect(claimed.map((job) => job.id)).toEqual(['job-free'])
+    expect(claimed.map((job) => job.id)).toEqual(['job-first', 'job-second'])
+    expect(jobRepository.query).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns an empty batch without a second read', async () => {
+    const { service, jobRepository } = makeService([])
+
+    await expect(claimPendingJobs(service, 'runner-1', 10)).resolves.toEqual([])
+    expect(jobRepository.query).toHaveBeenCalledTimes(1)
+    expect(jobRepository.find).not.toHaveBeenCalled()
   })
 
   it('propagates a database failure instead of reporting it as a lost race', async () => {
-    const jobs = [makePendingJob('job-1')]
-    const { service, jobRepository } = makeService(jobs, () => true)
-    jobRepository.update.mockRejectedValueOnce(new Error('deadlock detected'))
+    const { service, jobRepository } = makeService([])
+    jobRepository.query.mockRejectedValueOnce(new Error('deadlock detected'))
 
     await expect(claimPendingJobs(service, 'runner-1', 10)).rejects.toThrow('deadlock detected')
   })

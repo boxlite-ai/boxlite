@@ -54,6 +54,7 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
 import { BoxPageQuery } from './dto/box-page-query.dto'
 import { WithInstrumentation } from '../common/decorators/otel.decorator'
+import { withCommerceOrganizationPlanScope } from '../common/utils/commerce-organization-plan.util'
 
 const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
@@ -135,38 +136,41 @@ export class BoxliteBoxController {
     @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
-    if (dto.checkpoint_id !== undefined) {
-      return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
-    }
-
-    // Attaching a managed volume grants the box read/write access to its data,
-    // so it is authorized independently of WRITE_BOXES: the caller must hold the
-    // volume permissions too. WRITE_BOXES alone must not reach another key's
-    // volumes (GHSA-2qqv-7cwv-mj8h).
-    if (dto.volumes?.length) {
-      this.assertCanAttachVolumes(authContext)
-    }
-
-    const organization = authContext.organization
-    const createBoxDto = createBoxToCreateBox(dto)
-    const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
-
-    let boxId: string | undefined
-    try {
-      let box = await this.boxService.create(createBoxDto, organization, ctx, {
-        maxCreatedBoxes,
-        createdBy: authContext.userId,
-      })
-      boxId = box.id
-      if (request) request[AUDIT_TARGET_ID] = box.id
-      if (box.state !== BoxState.STARTED) {
-        box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+    return withCommerceOrganizationPlanScope(async () => {
+      if (dto.checkpoint_id !== undefined) {
+        return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
       }
-      return boxToBoxResponse(box)
-    } catch (error) {
-      this.logCreateFailure(error, dto, organization.id, boxId)
-      throw error
-    }
+
+      // Attaching a managed volume grants the box read/write access to its data,
+      // so it is authorized independently of WRITE_BOXES: the caller must hold the
+      // volume permissions too. WRITE_BOXES alone must not reach another key's
+      // volumes (GHSA-2qqv-7cwv-mj8h).
+      if (dto.volumes?.length) {
+        this.assertCanAttachVolumes(authContext)
+      }
+
+      const organization = authContext.organization
+      const createBoxDto = createBoxToCreateBox(dto)
+      const maxCreatedBoxes = this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
+      void maxCreatedBoxes.catch(() => undefined)
+
+      let boxId: string | undefined
+      try {
+        let box = await this.boxService.create(createBoxDto, organization, ctx, {
+          maxCreatedBoxesPromise: maxCreatedBoxes,
+          createdBy: authContext.userId,
+        })
+        boxId = box.id
+        if (request) request[AUDIT_TARGET_ID] = box.id
+        if (box.state !== BoxState.STARTED) {
+          box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+        }
+        return boxToBoxResponse(box)
+      } catch (error) {
+        this.logCreateFailure(error, dto, organization.id, boxId)
+        throw error
+      }
+    })
   }
 
   private logCreateFailure(error: unknown, dto: CreateBoxDto, organizationId: string, boxId?: string): void {

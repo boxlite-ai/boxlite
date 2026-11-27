@@ -236,7 +236,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     }
   }
 
-  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'sync-states' })
+  @Cron(process.env.BOX_SYNC_STATES_CRON || CronExpression.EVERY_MINUTE, { name: 'sync-states' })
   @TrackJobExecution()
   @WithInstrumentation()
   @LogExecution('sync-states')

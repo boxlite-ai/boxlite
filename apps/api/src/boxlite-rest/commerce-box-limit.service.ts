@@ -10,6 +10,9 @@ import { Redis } from 'ioredis'
 import { TypedConfigService } from '../config/typed-config.service'
 import { BoxCreationAdmissionUnavailableError } from '../box/errors/box-creation-limit.error'
 import { WithInstrumentation } from '../common/decorators/otel.decorator'
+import { fetchCommerceOrganizationPlan } from '../common/utils/commerce-organization-plan.util'
+
+export { withCommerceOrganizationPlanScope } from '../common/utils/commerce-organization-plan.util'
 
 const COMMERCE_REQUEST_TIMEOUT_MS = 2_000
 const COMMERCE_BOX_LIMIT_CACHE_KEY_PREFIX = 'commerce:box-limit:v1:'
@@ -151,7 +154,7 @@ export class CommerceBoxLimitService {
     try {
       responses = await Promise.all([
         axios.get<unknown>(`${baseUrl}/plan`, requestConfig),
-        axios.get<unknown>(`${baseUrl}/organization/${encodeURIComponent(organizationId)}/plan`, requestConfig),
+        fetchCommerceOrganizationPlan(baseUrl, organizationId, token),
       ])
     } catch (error) {
       if (this.isTemporarilyUnavailable(error)) {

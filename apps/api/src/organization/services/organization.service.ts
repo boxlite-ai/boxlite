@@ -48,6 +48,9 @@ import { OtelConfigDto } from '../dto/otel-config.dto'
 import { boxLookupCacheKeyByAuthToken } from '../../box/utils/box-lookup-cache.util'
 import { BoxRepository } from '../../box/repositories/box.repository'
 import { Domain } from '../../box/entities/domain.entity'
+import { TtlLruCache } from '../../common/utils/ttl-lru-cache.util'
+import { isEnableApiModuleCache } from '../../common/utils/api-module-cache.util'
+import { recordApiModuleCacheAccess } from '../../common/utils/cache-metrics.util'
 
 @Injectable()
 export class OrganizationService implements OnModuleInit, TrackableJobExecutions, OnApplicationShutdown {
@@ -57,6 +60,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   activeJobs = new Set<string>()
   private readonly logger = new Logger(OrganizationService.name)
   private defaultBoxLimitedNetworkEgress: boolean
+  private readonly nestedVirtualizationCache = new TtlLruCache<string, boolean>(1_000, 60_000)
 
   constructor(
     @InjectRepository(Organization)
@@ -119,9 +123,19 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     if (!result.affected) {
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
+    this.nestedVirtualizationCache.delete(organizationId)
   }
 
   async isNestedVirtualizationEnabled(organizationId: string): Promise<boolean> {
+    // TODO: 接受管理员修改在所有 API 实例最长 60 秒生效，优先减少热路径查询。
+    const cacheEnabled = isEnableApiModuleCache(this.configService.get('apiModuleCache.enabled'), organizationId)
+    const cached = cacheEnabled ? this.nestedVirtualizationCache.get(organizationId) : undefined
+    if (cached !== undefined) {
+      recordApiModuleCacheAccess('nested_virtualization', 'hit')
+      return cached
+    }
+    recordApiModuleCacheAccess('nested_virtualization', cacheEnabled ? 'miss' : 'bypass')
+
     const organization = await this.organizationRepository.findOne({
       where: { id: organizationId },
       select: { id: true, nestedVirtualizationEnabled: true },
@@ -130,7 +144,9 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     if (!organization) {
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
-    return organization.nestedVirtualizationEnabled === true
+    const enabled = organization.nestedVirtualizationEnabled === true
+    if (cacheEnabled) this.nestedVirtualizationCache.set(organizationId, enabled)
+    return enabled
   }
 
   async findByIds(organizationIds: string[]): Promise<Organization[]> {

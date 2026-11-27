@@ -12,6 +12,8 @@ import { SystemRole } from '../../user/enums/system-role.enum'
 import { isProxyContext } from '../../common/interfaces/proxy-context.interface'
 import { isRegionProxyContext, RegionProxyContext } from '../../common/interfaces/region-proxy.interface'
 
+export const BOX_ACCESS_SNAPSHOT = Symbol('box-access-snapshot')
+
 @Injectable()
 export class BoxAccessGuard implements CanActivate {
   constructor(private readonly boxService: BoxService) {}
@@ -30,10 +32,11 @@ export class BoxAccessGuard implements CanActivate {
         case isRunnerContext(authContext): {
           // For runner authentication, verify that the runner ID matches the box's runner ID
           const runnerContext = authContext as RunnerContext
-          const boxRunnerId = await this.boxService.getRunnerId(boxIdOrName)
-          if (boxRunnerId !== runnerContext.runnerId) {
+          const box = await this.boxService.findOneByIdOrName(boxIdOrName, undefined, true, undefined, false)
+          if (box.runnerId !== runnerContext.runnerId) {
             throw new ForbiddenException('Runner ID does not match box runner ID')
           }
+          request[BOX_ACCESS_SNAPSHOT] = box
           break
         }
         case isRegionProxyContext(authContext): {

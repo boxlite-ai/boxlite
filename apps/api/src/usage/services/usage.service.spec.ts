@@ -4,7 +4,7 @@
  */
 
 import { EVENT_LISTENER_METADATA } from '@nestjs/event-emitter/dist/constants'
-import { FindOperator } from 'typeorm'
+import { FindOperator, IsNull } from 'typeorm'
 import { BoxEvents } from '../../box/constants/box-events.constants'
 import { Box } from '../../box/entities/box.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
@@ -44,11 +44,21 @@ const satisfies = (actual: unknown, condition: unknown): boolean => {
 }
 
 const makeService = (stored: BoxUsagePeriod[] = []) => {
+  const applyUpdate = async (save, args: any[]) => {
+    const [where, updateData] = args.length === 2 ? args : args.slice(1)
+    const period = stored.find((candidate) =>
+      Object.entries(where).every(([column, condition]) => satisfies((candidate as any)[column], condition)),
+    )
+    if (!period) return { affected: 0 }
+    Object.assign(period, updateData)
+    await save(period)
+    return { affected: 1 }
+  }
   const lease = {
     signal: new AbortController().signal,
     release: jest.fn().mockResolvedValue(undefined),
   }
-  const transactionalEntityManager = {
+  const transactionalEntityManager: any = {
     find: jest.fn().mockResolvedValue([]),
     findOne: jest.fn(
       async (_entity, { where }: any): Promise<any> =>
@@ -57,15 +67,17 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
         ),
     ),
     delete: jest.fn().mockResolvedValue(undefined),
+    update: jest.fn(async (...args) => applyUpdate(transactionalEntityManager.save, args)),
     save: jest.fn().mockImplementation(async (value) => usagePeriodRepository.save(value)),
   }
-  const usagePeriodRepository = {
+  const usagePeriodRepository: any = {
     findOne: jest.fn(async ({ where }: any) =>
       stored.find((period) =>
         Object.entries(where).every(([column, condition]) => satisfies((period as any)[column], condition)),
       ),
     ),
     find: jest.fn().mockResolvedValue([]),
+    update: jest.fn(async (...args) => applyUpdate(usagePeriodRepository.save, args)),
     save: jest.fn().mockImplementation(async (period) => period),
     manager: {
       transaction: jest.fn(async (callback) => callback(transactionalEntityManager)),
@@ -116,6 +128,40 @@ describe('UsageService event subscriptions', () => {
     const subscriptions = Reflect.getMetadata(EVENT_LISTENER_METADATA, (UsageService.prototype as any)[handler])
 
     expect(subscriptions).toEqual([expect.objectContaining({ event: expectedEvent })])
+  })
+})
+
+describe('UsageService.closeUsagePeriod', () => {
+  it('closes an open period with one conditional UPDATE and no SELECT or entity save', async () => {
+    const usagePeriodRepository = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      findOne: jest.fn().mockResolvedValue(null),
+      save: jest.fn(),
+    }
+    const service = new UsageService(usagePeriodRepository as any, {} as any, {} as any, {} as any, {} as any)
+    const endAt = new Date('2026-11-27T00:00:00.000Z')
+
+    await (service as any).closeUsagePeriod('box-1', undefined, endAt)
+
+    expect(usagePeriodRepository.update).toHaveBeenCalledWith({ boxId: 'box-1', endAt: IsNull() }, { endAt })
+    expect(usagePeriodRepository.findOne).not.toHaveBeenCalled()
+    expect(usagePeriodRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('uses the caller transaction for the conditional UPDATE', async () => {
+    const manager = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      findOne: jest.fn().mockResolvedValue(null),
+      save: jest.fn(),
+    }
+    const service = new UsageService({} as any, {} as any, {} as any, {} as any, {} as any)
+    const endAt = new Date('2026-11-27T00:00:00.000Z')
+
+    await (service as any).closeUsagePeriod('box-1', manager, endAt)
+
+    expect(manager.update).toHaveBeenCalledWith(BoxUsagePeriod, { boxId: 'box-1', endAt: IsNull() }, { endAt })
+    expect(manager.findOne).not.toHaveBeenCalled()
+    expect(manager.save).not.toHaveBeenCalled()
   })
 })
 

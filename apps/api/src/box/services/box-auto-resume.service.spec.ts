@@ -10,7 +10,10 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 const organization = { id: 'org-1', suspended: false } as any
 
 function makeHarness(initial: Record<string, unknown>) {
-  const boxService = { ensureStartedForProxy: jest.fn().mockResolvedValue(initial) }
+  const boxService = {
+    ensureStartedForProxy: jest.fn().mockResolvedValue(initial),
+    assertOrganizationIsNotSuspended: jest.fn(),
+  }
   const waiter = {
     waitForStarted: jest.fn().mockResolvedValue({ state: BoxState.STARTED }),
     waitForStopped: jest.fn().mockResolvedValue({ state: BoxState.STOPPED }),
@@ -28,17 +31,35 @@ function makeHarness(initial: Record<string, unknown>) {
 }
 
 describe('BoxAutoResumeService', () => {
-  it('returns immediately for an already STARTED box', async () => {
-    const { service, waiter, redisLockProvider } = makeHarness({
+  it('reuses an already running snapshot without a second Box read or Redis lock', async () => {
+    const box = {
       id: 'box-1',
       state: BoxState.STARTED,
       desiredState: BoxDesiredState.STARTED,
-    })
+    }
+    const { service, boxService, waiter, redisLockProvider } = makeHarness(box)
 
-    await service.ensureReady('box-1', organization)
+    await service.ensureReady('box-1', organization, undefined, box as any)
+
+    expect(boxService.assertOrganizationIsNotSuspended).toHaveBeenCalledWith(organization)
+    expect(boxService.ensureStartedForProxy).not.toHaveBeenCalled()
     expect(waiter.waitForStarted).not.toHaveBeenCalled()
-    expect(redisLockProvider.lock.mock.calls).toEqual([['box:box-1:state-change', 30]])
-    expect(redisLockProvider.unlock.mock.calls).toEqual([['box:box-1:state-change']])
+    expect(redisLockProvider.lock).not.toHaveBeenCalled()
+    expect(redisLockProvider.unlock).not.toHaveBeenCalled()
+  })
+
+  it('uses the locked resume path when the snapshot is no longer desired STARTED', async () => {
+    const box = {
+      id: 'box-1',
+      state: BoxState.STARTED,
+      desiredState: BoxDesiredState.STOPPED,
+    }
+    const { service, boxService, redisLockProvider } = makeHarness(box)
+
+    await service.ensureReady('box-1', organization, undefined, box as any)
+
+    expect(boxService.ensureStartedForProxy).toHaveBeenCalled()
+    expect(redisLockProvider.lock).toHaveBeenCalled()
   })
 
   it('joins an in-flight Start and waits for STARTED', async () => {

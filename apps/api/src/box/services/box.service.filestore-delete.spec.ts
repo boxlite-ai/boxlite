@@ -15,6 +15,7 @@ function makeDestroyService(box: any) {
   const updatedBox = { ...box, desiredState: BoxDesiredState.DESTROYED }
   const boxRepository = {
     findWithCheckpointState: jest.fn().mockResolvedValue({ box, checkpointState: null }),
+    findWithCheckpointStateForLifecycle: jest.fn().mockResolvedValue({ box, checkpointState: null }),
     updateWhere: jest.fn().mockResolvedValue(updatedBox),
   }
   const eventEmitter = { emit: jest.fn() }
@@ -58,6 +59,8 @@ describe('BoxService Filestore restart deletion', () => {
     })
     expect(eventEmitter.emit).toHaveBeenCalledWith(BoxEvents.DESTROYED, expect.anything())
     expect(filestoreInstanceResolver.resolve).not.toHaveBeenCalled()
+    expect(boxRepository.findWithCheckpointStateForLifecycle).toHaveBeenCalledWith('box-1', 'org-1', 'id-or-name')
+    expect(boxRepository.findWithCheckpointState).not.toHaveBeenCalled()
   })
 
   it('keeps rejecting other pending restarts', async () => {

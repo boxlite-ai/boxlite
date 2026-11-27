@@ -1265,11 +1265,45 @@ coverage. To test real compatible/new Go decoders, install Go 1.23+ and set
 `COMPAT_API_CLIENT_ROOT` to an exported compatibility-release `apps/libs/api-client-go`
 directory. Decoder tests consume unmodified responses from the current Box producer.
 
+## Hot-path I/O and consistency controls
+
+`ENABLE_API_MODULE_CACHE=true` enables the optional organization nested-virtualization and
+region metadata caches. Both use a 60-second TTL; the nested-policy cache is an in-process
+LRU, while region lookup uses the existing TypeORM query cache. Administrator changes can
+therefore take up to 60 seconds to reach every API instance. The switch defaults to false
+and does not disable existing caches. `isEnableApiModuleCache` also accepts an organization
+ID so a future organization-specific override can supersede the global default.
+
+Runner bearer-token authentication has a separate in-process, 60-second LRU keyed by the
+SHA-256 token hash. A hit bypasses both the user-key miss and Runner lookup; revocation or
+rotation can take up to 60 seconds and each API instance has its own cache. Set
+`ENABLE_RUNNER_AUTH_CACHE=false` to bypass both cache reads and writes independently of the
+metadata-cache switch. Existing explicit `findOne(id, true)` region lookups retain their
+original 30-second TTL; only the new switch-enabled default path uses 60 seconds. Runner IDs,
+region lookups and organization policy must not be used as a substitute for the required
+organization-suspension check on proxy execution.
+
+`BOX_SYNC_STATES_CRON` controls the compensating state scan and defaults to one minute.
+Set it to `*/10 * * * * *` to restore the previous ten-second interval. Ordinary runner
+callbacks and events still update state immediately; the interval only bounds recovery of
+missed work, subject to backlog and lock contention.
+
+`BOX_ORGANIZATION_ACTIVITY_ASYNC` defaults to true. Organization activation-fact writes
+run after the Box transaction without delaying its caller, with at most three attempts and
+jittered exponential backoff. `GREATEST` keeps timestamps monotonic. A final failure or
+process exit can lose an activity update; set the variable to false to wait for one
+best-effort upsert synchronously without retries.
+
 ## Mutation auditing
 
-Business writes use `@Audit` to insert a pending `audit_log` row before the handler runs.
-If insertion fails, the mutation is refused. Completion failures leave a pending row
-for reconciliation; audit status is the HTTP outcome, not an execution's exit code.
+By default, business writes construct the pending `audit_log` identity and start its INSERT
+without waiting for that write before invoking the handler. Audit insertion or completion
+failures do not roll back the business mutation and can leave a missing or unknown (`0`)
+record. Each request serializes its own pending INSERT, response lease and completion write.
+Response listeners are registered synchronously before forwarding, so a fast response is
+still captured. Set `AUDIT_ASYNC_WRITES_ENABLED=false` to restore synchronous pre-handler
+insertion and lease acquisition; in that mode an initial audit failure refuses the mutation.
+Audit status remains the HTTP outcome, not an execution's exit code.
 
 The portable REST aliases share auditing for volume creation/deletion, image deletion,
 domain claim/bind/unbind, execution start/signal/termination, file upload, SSH
@@ -1289,20 +1323,21 @@ targets the secondary `provider|userId`. Invalid identity fields leave the targe
 
 Proxy operations use response completion: `finish` records the response status;
 `close` before completion or a response error records unknown (`0`). Completion is
-claimed once before persisting, and its listeners are removed. A client disconnect
-while the initial insert is pending prevents forwarding once that insert returns.
-`finish` confirms server-side transmission, not client receipt.
+claimed once before persisting, and its listeners are removed. A client disconnect is
+captured by those listeners even while the initial insert is pending. `finish` confirms
+server-side transmission, not client receipt.
 
-Before forwarding, response-completion audits acquire a five-minute database lease,
+Response-completion audits acquire a five-minute database lease after the pending INSERT,
 renewed every minute. Active uploads and streaming responses remain pending beyond
-30 minutes. A failed renewal closes the response; a crashed owner's expired lease
-allows the usual age-based reconciliation. Completion stops renewal and conditionally
-updates only the still-pending, unexpired row, so a late response cannot overwrite an
-unknown result or recreate a published record. Initial audit insertion and lease acquisition
-share one five-second deadline before the handler is called. Later renewals and result
-writes each have their own five-second deadline. Pre-handler acquisition failures and
-database timeouts return 503 without invoking the handler; unexpected audit failures return
-500. Result-write failures log their cause and preserve the handler's result.
+30 minutes. In the default asynchronous mode a failed renewal records unknown without
+destroying the business response; the synchronous fallback retains the close-on-lease-loss
+behavior. A crashed owner's expired lease allows the usual age-based reconciliation.
+Completion stops renewal and conditionally updates only the still-pending, unexpired row,
+so a late response cannot overwrite an unknown result or recreate a published record.
+Each write has a five-second deadline. Only the synchronous fallback shares the initial
+INSERT and lease deadline before invoking the handler, returning 503 on acquisition timeout
+and 500 on unexpected initial failure. Result-write failures always log their cause and
+preserve the handler's result.
 Deploy the additive lease-column migration before the API; all reconcilers must be
 upgraded before this protection applies. Remove new API writers before rolling back
 the column.
@@ -1358,13 +1393,16 @@ Late acquisitions are released without executing SQL. Time limits bound waiting 
 not the number of queued requests under arbitrary load.
 
 For example, 100 audit requests can reuse a smaller connection pool; requests wait for
-available connections within their deadlines. If initial insertion takes four seconds,
-the response lease has about one second left before forwarding must be refused.
+available connections within their deadlines. Asynchronous auditing moves that pool wait
+off the caller's critical path but does not reduce total database work. With synchronous
+auditing, initial insertion taking four seconds leaves about one second for its lease.
 
 ```text
-HTTP request -> audit insert -> initial lease -> handler -> result audit
-               <--- shared five seconds --->              < five seconds >
-                     expiry -> 503, no handler
+default:       HTTP request -> start audit chain -> handler -> response
+                              pending insert -> initial lease -> result audit
+
+sync fallback: HTTP request -> audit insert -> initial lease -> handler -> result audit
+                              expiry -> 503, no handler
 ```
 
 Closed attach sessions remove listeners and socket/request references without waiting

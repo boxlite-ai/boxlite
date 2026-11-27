@@ -40,7 +40,10 @@ export class BoxAutoResumeService {
 
   /** Submit or join Start and return only after the Box is actually STARTED. */
   @WithInstrumentation('box.auto_resume')
-  async ensureReady(boxId: string, organization: Organization, admit?: ProxyAdmission): Promise<void> {
+  async ensureReady(boxId: string, organization: Organization, admit?: ProxyAdmission, snapshot?: Box): Promise<void> {
+    this.boxService.assertOrganizationIsNotSuspended(organization)
+    if (snapshot?.state === BoxState.STARTED && snapshot.desiredState === BoxDesiredState.STARTED) return
+
     let box = await this.submitOrJoinStart(boxId, organization, admit)
 
     const stopping =

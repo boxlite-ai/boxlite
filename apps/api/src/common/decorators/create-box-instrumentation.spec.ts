@@ -126,6 +126,7 @@ describe('create box instrumentation contracts', () => {
   it('records create orchestration, event and runner dispatch stages', async () => {
     const createContext = {
       organizationService: { isNestedVirtualizationEnabled: async () => false },
+      organizationBoxLimits: { resolve: async () => ({ maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 }) },
       getValidatedOrDefaultRegion: async () => {
         throw new Error('stop after admission starts')
       },

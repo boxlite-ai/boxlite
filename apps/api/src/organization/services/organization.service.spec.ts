@@ -39,8 +39,22 @@ const makeService = (found: Organization | null) => {
     {} as any,
   )
 
-  return { service, organizationRepository }
+  return { service, organizationRepository, configService }
 }
+
+describe('OrganizationService nested virtualization cache', () => {
+  it.each([true, false])('uses the 60-second cache only when enabled=%s', async (cacheEnabled) => {
+    const { service, organizationRepository, configService } = makeService(
+      organization({ nestedVirtualizationEnabled: true }),
+    )
+    configService.get.mockImplementation((key: string) => (key === 'apiModuleCache.enabled' ? cacheEnabled : undefined))
+
+    await expect(service.isNestedVirtualizationEnabled('org-1')).resolves.toBe(true)
+    await expect(service.isNestedVirtualizationEnabled('org-1')).resolves.toBe(true)
+
+    expect(organizationRepository.findOne).toHaveBeenCalledTimes(cacheEnabled ? 1 : 2)
+  })
+})
 
 describe('OrganizationService.unsuspend', () => {
   it('unsuspends unconditionally when no ifReason is given', async () => {
