@@ -20,7 +20,7 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 type boundedSessionLocker struct{ lock.SessionLocker }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/boxlite-ai/secret-server/internal/attest"
 	"github.com/boxlite-ai/secret-server/internal/database"
 	"github.com/boxlite-ai/secret-server/internal/encryption"
+	"github.com/boxlite-ai/secret-server/internal/fetch"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/api/idtoken"
@@ -71,6 +72,9 @@ func newServer(ctx context.Context, c Config, deps startupDependencies) (*Server
 			return nil, errors.New("invalid runner attestation configuration (check SECRET_SERVER_ATTESTORS, SECRET_SERVER_RUNNER_REGISTRY and gcp_iit settings)")
 		}
 		runnerVerifier = selector
+		if err := fetch.ValidateIntrospectionURL(c.IntrospectionURL); err != nil {
+			return nil, fmt.Errorf("invalid SECRET_SERVER_INTROSPECTION_URL: %w", err)
+		}
 	}
 	provider, err := encryption.NewEnvKeyProvider(c.KeyID, c.Key)
 	if err != nil {
@@ -113,13 +117,22 @@ func newServer(ctx context.Context, c Config, deps startupDependencies) (*Server
 		db.Close()
 		return nil, errors.New("database initialization failed")
 	}
+	var fetchHandler http.Handler
+	if runnerVerifier != nil {
+		handler, err := fetch.New(db, cipher, runnerVerifier, c.IntrospectionURL, slog.Default())
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("invalid SECRET_SERVER_INTROSPECTION_URL: %w", err)
+		}
+		fetchHandler = handler
+	}
 	validator, err := deps.newValidator(ctx)
 	if err != nil {
 		db.Close()
 		return nil, errors.New("token validator initialization failed")
 	}
 	s := &Server{config: c, db: db}
-	s.http = &http.Server{Addr: net.JoinHostPort("", c.Port), Handler: routes(c, db.Ping, validator.Validate, runnerVerifier), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	s.http = &http.Server{Addr: net.JoinHostPort("", c.Port), Handler: routes(c, db.Ping, validator.Validate, fetchHandler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	return s, nil
 }
 
@@ -148,17 +161,15 @@ func databaseError(err error) error {
 	}
 }
 
-func routes(c Config, ping func(context.Context) error, validate validateToken, runnerVerifier attest.Verifier) http.Handler {
+func routes(c Config, ping func(context.Context) error, validate validateToken, fetchHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
-	// Endpoint implementations are supplied by their respective follow-up work.
-	// The fetch path is reserved separately so the write middleware never handles it.
+	// Reserve fetch paths so they never fall through to the write middleware.
 	notFound := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { problem(w, http.StatusNotFound, "not_found") })
-	var fetch http.Handler = notFound
-	if runnerVerifier != nil {
-		fetch = fetchAuth(runnerVerifier, fetch)
+	if fetchHandler == nil || (c.Role != "fetch" && c.Role != "all") {
+		fetchHandler = notFound
 	}
-	mux.Handle("/internal/v1/fetch", fetch)
-	mux.Handle("/internal/v1/fetch/", fetch)
+	mux.Handle("/internal/v1/fetch", fetchHandler)
+	mux.Handle("/internal/v1/fetch/", notFound)
 	if c.Role == "write" || c.Role == "all" {
 		mux.Handle("/internal/v1/", writeAuth(c, validate, notFound))
 	}

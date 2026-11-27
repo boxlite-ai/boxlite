@@ -13,12 +13,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/boxlite-ai/secret-server/internal/encryption"
 	"github.com/boxlite-ai/secret-server/internal/testdb"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
 )
@@ -75,6 +77,42 @@ func TestIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
+	t.Run("upgrade populated version one", func(t *testing.T) {
+		_, dsn := testdb.Create(t, ctx, admin, url, false)
+		legacyPool, err := pgxpool.New(ctx, dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer legacyPool.Close()
+		initial, err := migrationFiles.ReadFile("migrations/00001_initial.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		bridge := stdlib.OpenDBFromPool(legacyPool)
+		provider, err := goose.NewProvider(goose.DialectPostgres, bridge, fstest.MapFS{"00001_initial.sql": &fstest.MapFile{Data: initial}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = provider.Up(ctx); err != nil {
+			t.Fatal(err)
+		}
+		bridge.Close()
+		if _, err = legacyPool.Exec(ctx, "INSERT INTO secret_access_log(result) VALUES ($1)", "ok"); err != nil {
+			t.Fatal(err)
+		}
+		if err = Migrate(ctx, legacyPool); err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		if err = legacyPool.QueryRow(ctx, "SELECT count(*) FROM secret_access_log WHERE result=$1", "ok").Scan(&count); err != nil || count != 1 {
+			t.Fatalf("preserved rows %d %v", count, err)
+		}
+		for _, result := range []string{"api_unavailable", "scope_mismatch", "store_unavailable", "attestation_unavailable"} {
+			if _, err = legacyPool.Exec(ctx, "INSERT INTO secret_access_log(result) VALUES ($1)", result); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
 	t.Run("temporary database URL supports pool options", func(t *testing.T) {
 		parsed, err := urlpkg.Parse(url)
 		if err != nil {
@@ -289,7 +327,7 @@ func TestIntegration(t *testing.T) {
 		if err := Migrate(ctx, pool); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (2, true)`); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (3, true)`); err != nil {
 			t.Fatal(err)
 		}
 		if err := Migrate(ctx, pool); err != nil {

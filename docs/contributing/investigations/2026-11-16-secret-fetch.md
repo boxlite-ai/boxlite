@@ -1,0 +1,122 @@
+**Status:** Implemented
+
+# Secret fetch implementation
+
+The fetch handler implements [#2724](https://github.com/boxlite-ai/boxlite/issues/2724)
+on the single-value database from [#2571](https://github.com/boxlite-ai/boxlite/issues/2571).
+
+## Scope and dependencies
+
+The database foundation from [#2612](https://github.com/boxlite-ai/boxlite/pull/2612)
+is merged into `main`. This change builds on that foundation, including runner
+attestation and envelope encryption, and integrates with the #2617 runtime. It extends the existing
+migrations without introducing a versioned secret model.
+
+The API implements atomic consumption in BUI-1385. This handler calls that API
+once and cannot independently guarantee consumption if the API violates its
+contract. Tests provide a consuming fake over HTTP. The service skeleton owns process startup and role selection. This change
+mounts the fetch handler in that runtime.
+
+| Dependency | Integration boundary | Required before |
+| --- | --- | --- |
+| [Database #2612](https://github.com/boxlite-ai/boxlite/pull/2612) | Schema, key verification, pool and encryption foundations | Available in `main` |
+| [Runtime #2617](https://github.com/boxlite-ai/boxlite/pull/2617) | Initialize storage before readiness and mount fetch for `fetch`/`all` roles | Building and starting the fetch service |
+| [Credential API #2769](https://github.com/boxlite-ai/boxlite/pull/2769) | Internal-only introspection with atomic consumption and runner binding | End-to-end deployment |
+
+The credential API contract is checked using the merged
+production controller and service in the
+[contract integration harness](../../../apps/secret-server/README.md#credential-api-contract-integration).
+The contract test starts the Secret Server command on a loopback listener with
+PostgreSQL and the dev attestor. Deployed ingress and real GCP attestation
+require separate validation.
+
+## Runtime integration
+
+The runtime starts with its existing PostgreSQL pool, initialized schema, and
+validated cipher. For `fetch` and `all`, build the handler with the runtime's
+Runner verifier and the full URL in `SECRET_SERVER_INTROSPECTION_URL`. Validate
+the URL and its endpoint path before opening the database pool. The handler owns Runner verification so the same
+verified identity drives consumption and audit, with one verification per request.
+The `write` role leaves the fetch route disabled and requires no API URL.
+
+## Contract
+
+```text
+runner proof -> attested runner ID -> consuming introspection
+             -> validate runner and complete grants
+             -> load and authorize all rows -> decrypt all -> response
+```
+
+`POST /internal/v1/fetch` accepts only a credential. It takes identity from
+`attest.Verifier`, never a body field. Introspection receives the credential and
+attested runner ID, with a three-second timeout, no redirects and no retries.
+HTTPS is required except for literal loopback IPs in local tests.
+Active replies must contain valid identifiers, a nonexpired expiry and a complete
+grant list. An inactive reply grants nothing. Repeated grants are rejected.
+
+Each row must belong to the authorized organization. Box scope additionally
+requires the authorized box ID; organization scope requires no box ID. Missing,
+disabled and out-of-scope rows fail the entire operation before any decryption.
+All decryption uses stored authenticated metadata and AAD version 1. Responses
+contain the same routing metadata, with no version field.
+
+All responses use `Cache-Control: no-store`. Errors use RFC 9457 problem details
+with fixed public codes. No response contains partial secrets, upstream errors,
+credentials or proofs. A deleted row has no available name to include.
+
+Audit entries contain only credential, runner, box and secret identifiers plus
+the outcome. One SQL statement inserts each batch atomically; a failed row rolls
+back the complete batch. Audit writes have a separate bounded context so request cancellation
+does not erase the attempt. Write failures increment a counter and emit a fixed
+log message, without changing the fetch outcome.
+
+Request bodies are limited to 4 KiB, API replies to 64 KiB, grants to 64,
+and concurrent fetch operations to 16. A single database statement checks
+ciphertext (64 KiB plus 29 bytes for the v1 envelope), wrapped key (64 KiB),
+serialized row (2 MiB) and grant set (12 MiB) sizes before returning payloads.
+The row budget accommodates the 1 MiB write request, including metadata and
+envelope serialization overhead. One statement avoids a race between checking
+sizes and reading rows.
+Success JSON is limited to 8 MiB, including escaping expansion. Oversized stored
+rows and saturation return `store_unavailable`; oversized API replies return
+`api_unavailable`. Tests cover limits and saturation.
+
+## Alternatives and evidence
+
+| Option | Decision | Reason |
+| --- | --- | --- |
+| Adapt RFC 7662 inactive response | Adopt | Explicit `active: false` denies access; no cached authorization survives consumption. |
+| Reusable OAuth introspection | Reject | Hydra and Keycloak describe reusable tokens; this API consumes one-time credentials. |
+| Retry or follow redirects | Reject | A consumed token cannot safely repeat; redirects can forward credentials. |
+| Reuse attestation and cipher | Adopt | Existing implementations already enforce proof and authenticated envelope contracts. |
+| Return secrets incrementally | Reject | Later authorization or authentication failures must expose no partial list. |
+
+Sources: [RFC 7662 §2.2](https://www.rfc-editor.org/rfc/rfc7662#section-2.2),
+[RFC 9457 §3](https://www.rfc-editor.org/rfc/rfc9457#section-3),
+[Go 1.25.4 HTTP transport](https://pkg.go.dev/net/http@go1.25.4#Transport),
+[Hydra introspection](https://github.com/ory/hydra/blob/master/oauth2/handler.go),
+[Keycloak endpoints](https://github.com/keycloak/keycloak/blob/main/docs/guides/securing-apps/partials/oidc/available-endpoints.adoc).
+These sources establish individual protocol mechanisms, not a consensus for
+consume-on-introspection. The local design explicitly chooses that contract.
+
+## Validation
+
+Extend access-log results with `api_unavailable`,
+`scope_mismatch`, `store_unavailable` and `attestation_unavailable`, rather than
+misclassify these failures under existing results. The updated fetch design
+defines these outcomes alongside the existing database foundation.
+
+Invalid proofs return 401 before introspection. A verifier outage returns 503
+`attestation_unavailable` without consuming a credential; a later retry can use
+the same credential. Inactive introspection exposes no specific rejection reason,
+so this service records only `credential_invalid`; the API owns detailed reasons.
+
+This is a new endpoint: no equivalent fetch or introspection implementation
+exists on the selected base. Full-revert defect proof does not apply.
+
+Checks cover two-secret success, empty grants, replay, concurrent
+redemption, invalid proof before API contact, mismatched runner and ownership,
+missing and disabled rows, API timeout and malformed replies, tampered policy,
+fixed AAD compatibility, audit failure and cancellation, and sensitive markers
+absent from logs. PostgreSQL integration checks exercise the real queries and
+audit constraints in an isolated database.

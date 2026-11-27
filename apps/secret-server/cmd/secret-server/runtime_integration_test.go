@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -119,15 +120,75 @@ func TestFetchRuntimeRequiresAttestation(t *testing.T) {
 			}
 
 			t.Setenv("SECRET_SERVER_ATTESTORS", "dev")
-			s := startRuntime(t, ctx)
-			address := s.awaitAddress(t, ctx)
-			for _, path := range []string{"/internal/v1/fetch", "/internal/v1/fetch/child"} {
-				if got := runtimeStatus(t, address, path, ""); got != http.StatusUnauthorized {
-					t.Errorf("%s without Runner proof returned %d, want 401", path, got)
+			t.Setenv("SECRET_SERVER_INTROSPECTION_URL", "http://api.invalid/internal/v1/credentials/introspect")
+			err = runWithListener(ctx, nil, func(_, _ string) (net.Listener, error) { return nil, listenCalled })
+			if errors.Is(err, listenCalled) || err == nil || !strings.Contains(err.Error(), "SECRET_SERVER_INTROSPECTION_URL") {
+				t.Fatalf("invalid introspection URL returned %v, want startup rejection before listen", err)
+			}
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				t.Error("request without valid proof or credential reached introspection")
+				w.WriteHeader(500)
+			}))
+			defer api.Close()
+			t.Setenv("SECRET_SERVER_INTROSPECTION_URL", api.URL+"/introspect")
+			address := startRuntime(t, ctx).awaitAddress(t, ctx)
+			for _, tc := range []struct {
+				path, proof string
+				status      int
+			}{
+				{"/internal/v1/fetch", "", 401},
+				{"/internal/v1/fetch", "test-runner", 401},
+				{"/internal/v1/fetch/child", "test-runner", 404},
+			} {
+				req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+address+tc.path, nil)
+				if err != nil {
+					t.Fatal(err)
 				}
-				if got := runtimeStatus(t, address, path, "test-runner"); got != http.StatusNotFound {
-					t.Errorf("%s with Runner proof returned %d, want placeholder 404", path, got)
+				if tc.proof != "" {
+					req.Header.Set(attest.DevHeader, tc.proof)
 				}
+				resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				if resp.StatusCode != tc.status {
+					t.Errorf("%s returned %d, want %d", tc.path, resp.StatusCode, tc.status)
+				}
+			}
+		})
+	}
+}
+
+func TestFetchStartupRejectsInvalidEndpoint(t *testing.T) {
+	for _, tc := range []struct{ role, endpoint string }{
+		{"fetch", ""},
+		{"all", "https://api.invalid"},
+		{"all", "https://api.invalid/"},
+	} {
+		t.Run(tc.role+"/"+tc.endpoint, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			dsn := runtimeDatabase(t, ctx)
+			t.Setenv("SECRET_SERVER_ROLE", tc.role)
+			t.Setenv("SECRET_SERVER_ATTESTORS", "dev")
+			t.Setenv("SECRET_SERVER_INTROSPECTION_URL", tc.endpoint)
+			err := runWithListener(ctx, nil, func(_, _ string) (net.Listener, error) {
+				t.Error("invalid config reached listener")
+				return nil, errors.New("listener reached")
+			})
+			if err == nil || !strings.Contains(err.Error(), "SECRET_SERVER_INTROSPECTION_URL") {
+				t.Errorf("startup error = %v, want introspection URL error", err)
+			}
+			pool, err := pgxpool.New(ctx, dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			var initialized bool
+			err = pool.QueryRow(ctx, "SELECT to_regclass('goose_db_version') IS NOT NULL OR to_regclass('key_verification_canary') IS NOT NULL").Scan(&initialized)
+			if err != nil || initialized {
+				t.Fatalf("invalid config initialized database: initialized=%t err=%v", initialized, err)
 			}
 		})
 	}
@@ -141,6 +202,7 @@ func TestFetchRuntimeRequiresGCPRunnerRegistry(t *testing.T) {
 			runtimeDatabase(t, ctx)
 			t.Setenv("SECRET_SERVER_ROLE", role)
 			t.Setenv("SECRET_SERVER_ATTESTORS", "gcp_iit")
+			t.Setenv("SECRET_SERVER_INTROSPECTION_URL", "https://api.invalid/internal/v1/credentials/introspect")
 			t.Setenv("SECRET_SERVER_AUDIENCE", "https://secret.example.invalid")
 			t.Setenv("SECRET_SERVER_GCP_PROJECT", "test-project")
 			t.Setenv("SECRET_SERVER_RUNNER_SERVICE_ACCOUNT", "runner@example.invalid")

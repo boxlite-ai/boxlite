@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/boxlite-ai/secret-server/internal/attest"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -19,17 +18,12 @@ func TestRoutes(t *testing.T) {
 	for _, role := range []string{"write", "fetch", "all"} {
 		t.Run(role, func(t *testing.T) {
 			pingErr := error(nil)
-			var runnerVerifier attest.Verifier
+			fetchHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 			wantFetch := http.StatusNotFound
 			if role == "fetch" || role == "all" {
-				selector, err := attest.New(attest.Config{Attestors: []string{attest.DevName}, Environment: "local"}, nil, slog.Default())
-				if err != nil {
-					t.Fatal(err)
-				}
-				runnerVerifier = selector
-				wantFetch = http.StatusUnauthorized
+				wantFetch = http.StatusNoContent
 			}
-			handler := routes(Config{Role: role, AuthMode: "dev", DevToken: "secret"}, func(context.Context) error { return pingErr }, nil, runnerVerifier)
+			handler := routes(Config{Role: role, AuthMode: "dev", DevToken: "secret"}, func(context.Context) error { return pingErr }, nil, fetchHandler)
 			request := func(path, token string) int {
 				r := httptest.NewRequest(http.MethodGet, path, nil)
 				if token != "" {
@@ -53,9 +47,9 @@ func TestRoutes(t *testing.T) {
 				t.Fatalf("liveness depends on db: %d", got)
 			}
 			if got := request("/internal/v1/fetch", ""); got != wantFetch {
-				t.Fatalf("unimplemented fetch: %d", got)
+				t.Fatalf("fetch route: %d", got)
 			}
-			if got := request("/internal/v1/fetch/child", ""); got != wantFetch {
+			if got := request("/internal/v1/fetch/child", ""); got != http.StatusNotFound {
 				t.Fatalf("fetch subtree: %d", got)
 			}
 			want := 401

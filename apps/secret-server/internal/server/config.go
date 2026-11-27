@@ -19,6 +19,7 @@ type Config struct {
 	Port                                                                     string
 	ShutdownTimeout                                                          time.Duration
 	RunnerAttestation                                                        attest.Config
+	IntrospectionURL                                                         string
 }
 
 func LoadConfig() (Config, error) {
@@ -77,6 +78,7 @@ func LoadConfig() (Config, error) {
 		return c, errors.New("invalid SECRET_SERVER_AUTH_MODE")
 	}
 	if c.Role == "fetch" || c.Role == "all" {
+		c.IntrospectionURL = os.Getenv("SECRET_SERVER_INTROSPECTION_URL")
 		c.RunnerAttestation = attest.Config{
 			Environment: c.Environment,
 			Registry:    os.Getenv("SECRET_SERVER_RUNNER_REGISTRY"),

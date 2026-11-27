@@ -41,6 +41,7 @@ Dated root-cause analyses and design studies, newest first.
 
 - 2026-11-19 · [Trial discovery in Welcome](investigations/2026-11-19-trial-discovery-preview.md): frontend onboarding study, mock boundaries, direct completion and full walkthrough screenshots.
 
+- 2026-11-16 · [Secret fetch implementation](investigations/2026-11-16-secret-fetch.md): credential redemption, ownership checks and all-or-nothing decryption.
 - 2026-11-13 · [Runner data-disk performance scaling](investigations/2026-11-13-runner-data-disk-performance-scaling.md): expansion raises provisioned IOPS/throughput proportionally, clipped to the per-disk ceiling; capacity never waits for performance.
 - 2026-11-13 · [Filestore lookup prerequisites](investigations/2026-11-13-filestore-lookup-prerequisites.md): automatic Filestore IAM and API prerequisites, cross-project configuration, and diagnostic error preservation.
 - 2026-11-13 · [Filestore instance discovery](investigations/2026-11-13-filestore-instance-discovery.md): API-resolved NFS targets, explicit backend selection, and deterministic instance assignment.
