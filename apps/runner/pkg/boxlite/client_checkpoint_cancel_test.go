@@ -49,7 +49,7 @@ func TestCheckpointExportRejectsRunningSourceBeforeNativeExport(t *testing.T) {
 	}
 	client := &Client{runtime: runtime, homeDir: t.TempDir(), logger: slog.Default(), boxes: make(map[string]*sdk.Box)}
 	defer client.Close()
-	_, _, err = client.ExportCheckpoint(context.Background(), "source", t.TempDir())
+	_, err = client.ExportCheckpoint(context.Background(), "source", t.TempDir(), "")
 	if exports.Load() != 0 {
 		t.Fatal("running source reached native export")
 	}

@@ -38,7 +38,7 @@ func TestCheckpointArtifactDurabilityFailurePreventsCapture(t *testing.T) {
 				root = filepath.Join(parent, "new", "archives")
 			}
 			captured := false
-			_, err := (Artifacts{Root: root}).Export(context.Background(), reference(), func(ctx context.Context, path string) (string, string, error) {
+			_, err := (Artifacts{Root: root}).Export(context.Background(), reference(), func(ctx context.Context, path string) (CaptureResult, error) {
 				captured = true
 				return captureBytes("must not capture before parent durability")(ctx, path)
 			})
@@ -53,9 +53,9 @@ func TestCheckpointArtifactDurabilityFailurePreventsCapture(t *testing.T) {
 }
 
 func captureBytes(data string) Capture {
-	return func(_ context.Context, directory string) (string, string, error) {
+	return func(_ context.Context, directory string) (CaptureResult, error) {
 		path := filepath.Join(directory, "source.boxlite")
-		return path, "registry:5000/app@sha256:" + strings.Repeat("a", 64), os.WriteFile(path, []byte(data), 0600)
+		return CaptureResult{ArchivePath: path, PinnedImage: "registry:5000/app@sha256:" + strings.Repeat("a", 64)}, os.WriteFile(path, []byte(data), 0600)
 	}
 }
 
@@ -70,9 +70,9 @@ func mustExport(t *testing.T, artifacts Artifacts, ref Reference, capture Captur
 
 func noCapture(t *testing.T) Capture {
 	t.Helper()
-	return func(context.Context, string) (string, string, error) {
+	return func(context.Context, string) (CaptureResult, error) {
 		t.Error("source must not be captured again")
-		return "", "", errors.New("unexpected capture")
+		return CaptureResult{}, errors.New("unexpected capture")
 	}
 }
 
@@ -117,6 +117,7 @@ func TestCheckpointArtifactReplayDoesNotReadTheSource(t *testing.T) {
 	artifacts := Artifacts{Root: t.TempDir()}
 	ref := reference()
 	first := mustExport(t, artifacts, ref, captureBytes(t.Name()))
+	ref.Kind = KindDisk // Explicit disk and legacy omitted kind identify the same capture.
 	second := mustExport(t, Artifacts{Root: artifacts.Root}, ref, noCapture(t))
 	if second != first {
 		t.Fatalf("replay changed the artifact: %#v != %#v", second, first)
@@ -205,9 +206,9 @@ func TestCheckpointArtifactConcurrentRedeliveryCapturesOnlyOnce(t *testing.T) {
 	ref := reference()
 	entered, resume := make(chan struct{}), make(chan struct{})
 	var count atomic.Int32
-	capture := func(ctx context.Context, path string) (string, string, error) {
+	capture := func(ctx context.Context, path string) (CaptureResult, error) {
 		if count.Add(1) != 1 {
-			return "", "", errors.New("duplicate capture")
+			return CaptureResult{}, errors.New("duplicate capture")
 		}
 		close(entered)
 		<-resume
@@ -282,11 +283,11 @@ func TestCheckpointArtifactMissingOrCorruptFilesNeverRecaptureOrUpload(t *testin
 func TestCheckpointArtifactFailedCaptureIsNotRepeatedAfterRestart(t *testing.T) {
 	artifacts := Artifacts{Root: t.TempDir()}
 	ref := reference()
-	_, err := artifacts.Export(context.Background(), ref, func(_ context.Context, path string) (string, string, error) {
+	_, err := artifacts.Export(context.Background(), ref, func(_ context.Context, path string) (CaptureResult, error) {
 		if err := os.WriteFile(filepath.Join(path, "partial.boxlite"), []byte("partial"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		return "", "", errors.New("capture failed after writing")
+		return CaptureResult{}, errors.New("capture failed after writing")
 	})
 	if err == nil {
 		t.Fatal("capture unexpectedly succeeded")
@@ -332,6 +333,84 @@ func TestCheckpointPinsOnlyTheSourcesRecordedBuild(t *testing.T) {
 	}
 	if _, err := PinImage("registry:5000/org/app:tag", "sha256:abc"); err == nil {
 		t.Fatal("invalid recorded digest was accepted")
+	}
+}
+
+func TestFullCheckpointArtifactUploadAndAcknowledge(t *testing.T) {
+	for _, size := range []int64{0, 4096} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			artifacts, ref := Artifacts{Root: t.TempDir()}, reference()
+			ref.Kind = KindFull
+			record := mustExport(t, artifacts, ref, func(ctx context.Context, dir string) (CaptureResult, error) {
+				result, err := captureBytes("archive")(ctx, dir)
+				result.MemorySizeBytes = &size
+				return result, err
+			})
+			if record.Kind != KindFull || record.MemorySizeBytes == nil || *record.MemorySizeBytes != size {
+				t.Fatalf("incorrect export metadata: %+v", record)
+			}
+			replayed := mustExport(t, Artifacts{Root: artifacts.Root}, ref, noCapture(t))
+			if replayed.MemorySizeBytes == record.MemorySizeBytes || !artifactsEqual(replayed, record) {
+				t.Fatalf("full replay should return equal metadata without recapturing: %+v != %+v", replayed, record)
+			}
+			store := &transferStore{}
+			wrong := record
+			other := size + 1
+			wrong.MemorySizeBytes = &other
+			if _, err := artifacts.Upload(t.Context(), wrong, store); err == nil {
+				t.Fatal("upload accepted a different memory size")
+			}
+			if err := artifacts.Acknowledge(t.Context(), wrong); err == nil {
+				t.Fatal("acknowledgment accepted a different memory size")
+			}
+			uploaded, err := artifacts.Upload(t.Context(), record, store)
+			if err != nil || uploaded.MemorySizeBytes == record.MemorySizeBytes || !artifactsEqual(uploaded, record) {
+				t.Fatalf("upload should compare memory size by value: %+v %v", uploaded, err)
+			}
+			if string(store.uploaded[ref.ArcPath]) != "archive" {
+				t.Fatal("upload did not transfer the captured bytes")
+			}
+			if err := artifacts.Acknowledge(t.Context(), record); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(artifacts.Root, ref.CheckpointID, ref.ExportJobID, "archive.boxlite")
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("acknowledgment did not remove the archive: %v", err)
+			}
+		})
+	}
+}
+
+func TestCheckpointArtifactRejectsInvalidMemoryMetadata(t *testing.T) {
+	negative, zero := int64(-1), int64(0)
+	for _, tc := range []struct {
+		name, kind string
+		size       *int64
+	}{
+		{"missing", KindFull, nil},
+		{"negative", KindFull, &negative},
+		{"disk", KindDisk, &zero},
+		{"legacy disk", "", &zero},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			artifacts, ref := Artifacts{Root: t.TempDir()}, reference()
+			ref.Kind = tc.kind
+			if _, err := artifacts.Export(t.Context(), ref, func(ctx context.Context, dir string) (CaptureResult, error) {
+				result, err := captureBytes("archive")(ctx, dir)
+				result.MemorySizeBytes = tc.size
+				return result, err
+			}); err == nil || !strings.Contains(err.Error(), "memorySizeBytes") {
+				t.Fatalf("export validation: %v", err)
+			}
+			directory := filepath.Join(artifacts.Root, ref.CheckpointID, ref.ExportJobID)
+			record := Artifact{Reference: ref, SizeBytes: 1, SHA256: strings.Repeat("a", 64), PinnedImage: "alpine@sha256:" + strings.Repeat("a", 64), MemorySizeBytes: tc.size}
+			if err := writeRecord(directory, record); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := artifacts.read(directory, ref); err == nil || !strings.Contains(err.Error(), "memorySizeBytes") {
+				t.Fatalf("record validation: %v", err)
+			}
+		})
 	}
 }
 

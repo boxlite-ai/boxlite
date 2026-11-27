@@ -22,6 +22,7 @@ type recoveryNative struct {
 	current       *NativeBox
 	importErr     error
 	commitThenErr bool
+	importState   string
 	removes       int
 	imports       int
 	candidates    map[string]*NativeBox
@@ -99,7 +100,11 @@ func (n *recoveryNative) Import(ctx context.Context, source *DownloadedArchive, 
 	if n.importErr != nil && !n.commitThenErr {
 		return "", n.importErr
 	}
-	candidate := &NativeBox{ID: uuid.NewString(), State: "stopped"}
+	state := n.importState
+	if state == "" {
+		state = "stopped"
+	}
+	candidate := &NativeBox{ID: uuid.NewString(), State: state}
 	n.candidates[name] = candidate
 	if n.current == nil {
 		n.current = candidate
@@ -119,6 +124,72 @@ func recoveryHarness(t *testing.T) (Restorer, RestoreRequest, *recoveryNative, *
 	operations := Operations{Root: filepath.Join(t.TempDir(), "operations")}
 	native.operations, native.target = operations, target
 	return Restorer{Operations: operations, Artifacts: artifacts, Store: store, Backend: native}, request, native, store
+}
+
+func TestCheckpointRestoreKindValidation(t *testing.T) {
+	_, request, _, _ := recoveryHarness(t)
+	zero, negative := int64(0), int64(-1)
+	for _, tc := range []struct {
+		kind, archiveKind string
+		size              *int64
+		valid             bool
+	}{
+		{"", "", nil, true},
+		{KindDisk, "", nil, true},
+		{KindFull, KindFull, &zero, true},
+		{"", KindFull, &zero, true},
+		{"invalid", "", nil, false},
+		{"", "invalid", nil, false},
+		{KindDisk, KindFull, &zero, false},
+		{KindFull, KindDisk, nil, false},
+		{KindFull, "", nil, false},
+		{KindFull, KindFull, nil, false},
+		{KindFull, KindFull, &negative, false},
+		{"", KindDisk, &zero, false},
+	} {
+		request.Kind, request.Archive.Kind, request.Archive.MemorySizeBytes = tc.kind, tc.archiveKind, tc.size
+		if err := request.validate(); (err == nil) != tc.valid {
+			t.Errorf("validate(%+v): %v", tc, err)
+		}
+	}
+}
+
+func TestCheckpointRestoreAcceptsConfiguredCandidate(t *testing.T) {
+	r, request, native, _ := recoveryHarness(t)
+	native.importState, native.commitThenErr = "configured", true
+	native.importErr = errors.New("lost import receipt")
+	if _, err := r.Restore(t.Context(), request, uuid.NewString()); err == nil {
+		t.Fatal("expected first attempt to lose the import receipt")
+	}
+	result, err := r.Restore(t.Context(), request, uuid.NewString())
+	if err != nil || native.imports != 1 || native.current == nil || native.current.ID != result.NativeID || native.current.State != "configured" {
+		t.Fatalf("configured candidate was not published: %+v %v", result, err)
+	}
+	// A published configured target (PID 0) remains recoverable before its first start.
+	next := request
+	next.OperationID, next.Sequence = uuid.NewString(), request.Sequence+1
+	native.commitThenErr, native.importErr = false, nil
+	recovered, err := r.Restore(t.Context(), next, uuid.NewString())
+	if err != nil || native.imports != 2 || recovered.NativeID == result.NativeID || native.current.ID != recovered.NativeID {
+		t.Fatalf("configured predecessor was not recoverable: %+v %v", recovered, err)
+	}
+}
+
+func TestCheckpointRestoreFullRetryComparesMemorySizeByValue(t *testing.T) {
+	r, request, native, _ := recoveryHarness(t)
+	size := int64(4096)
+	request.Kind, request.Archive.Kind, request.Archive.MemorySizeBytes = KindFull, KindFull, &size
+	native.importErr = errors.New("transient import failure")
+	if _, err := r.Restore(t.Context(), request, uuid.NewString()); err == nil {
+		t.Fatal("expected transient import failure")
+	}
+	retry := request
+	sameSize := int64(4096)
+	retry.Archive.MemorySizeBytes = &sameSize
+	native.importErr = nil
+	if _, err := r.Restore(t.Context(), retry, uuid.NewString()); err != nil {
+		t.Fatalf("full checkpoint retry with equal memorySizeBytes failed: %v", err)
+	}
 }
 
 func TestCheckpointRestoreImportFailurePreservesPredecessor(t *testing.T) {

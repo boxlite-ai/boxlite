@@ -7,6 +7,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -68,7 +69,7 @@ func TestCheckpointClientLifecycleRefusesCorruptJournalAndCancelledAdmission(t *
 				"stop":    func() error { return client.Stop(ctx, "target", false) },
 				"destroy": func() error { return client.Destroy(ctx, "target") },
 				"export":  func() error { _, err := client.ExportBox(ctx, "target", t.TempDir()); return err },
-				"capture": func() error { _, _, err := client.ExportCheckpoint(ctx, "target", t.TempDir()); return err },
+				"capture": func() error { _, err := client.ExportCheckpoint(ctx, "target", t.TempDir(), ""); return err },
 				"import":  func() error { return client.ImportBox(ctx, "target", "missing.boxlite") },
 			}
 			if scenario == "cancelled" {
@@ -347,6 +348,42 @@ func TestCheckpointNativeAdapterImport(t *testing.T) {
 	}
 }
 
+func TestCheckpointClientExportKindAndSourceState(t *testing.T) {
+	for _, tc := range []struct{ kind, state, wantError string }{
+		{checkpoint.KindDisk, "running", "must be stopped"},
+		{checkpoint.KindFull, "stopped", "must be running"},
+		{checkpoint.KindFull, "running", ""},
+		{"invalid", "running", "invalid checkpoint kind"},
+	} {
+		t.Run(tc.kind+"/"+tc.state, func(t *testing.T) {
+			client := checkpointRESTClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/v1/config" {
+					_, _ = io.WriteString(w, `{"capabilities":{"export_enabled":true}}`)
+					return
+				}
+				if r.Method != http.MethodGet || tc.kind == "invalid" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				_, _ = io.WriteString(w, checkpointWireBox("source", "source", tc.state, "alpine@sha256:"+strings.Repeat("a", 64)))
+			})
+			_, err := client.ExportCheckpoint(t.Context(), "source", t.TempDir(), tc.kind)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("want error containing %q, got %v", tc.wantError, err)
+				}
+				return
+			}
+			// REST rejects IncludeMemory before issuing an export request. A disk
+			// export would POST to the server instead.
+			var nativeErr *sdk.Error
+			if !errors.As(err, &nativeErr) || nativeErr.Code != sdk.ErrUnsupported {
+				t.Fatalf("expected SDK to reject IncludeMemory over REST, got %v", err)
+			}
+		})
+	}
+}
+
 func TestCheckpointClientExportThroughNativeREST(t *testing.T) {
 	for _, scenario := range []string{"success", "lookup-error", "unrecorded-image", "export-error", "invalid-destination"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -379,11 +416,11 @@ func TestCheckpointClientExportThroughNativeREST(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			path, pinned, err := client.ExportCheckpoint(context.Background(), "source", destination)
+			result, err := client.ExportCheckpoint(context.Background(), "source", destination, checkpoint.KindDisk)
 			if scenario == "success" {
-				data, readErr := os.ReadFile(path)
-				if err != nil || readErr != nil || string(data) != "captured disk" || pinned != image {
-					t.Fatalf("export: %q %q %v %v", path, pinned, err, readErr)
+				data, readErr := os.ReadFile(result.ArchivePath)
+				if err != nil || readErr != nil || string(data) != "captured disk" || result.PinnedImage != image || result.MemorySizeBytes != nil {
+					t.Fatalf("export: %+v %v %v", result, err, readErr)
 				}
 			} else if err == nil {
 				t.Fatal("native export failure was swallowed")

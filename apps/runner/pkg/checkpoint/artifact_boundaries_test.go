@@ -22,7 +22,7 @@ func TestCheckpointArtifactCancelledWaiterPreservesCaptureOwnership(t *testing.T
 	t.Cleanup(func() { close(release) })
 	done := make(chan error, 1)
 	go func() {
-		_, err := artifacts.Export(t.Context(), ref, func(ctx context.Context, stage string) (string, string, error) {
+		_, err := artifacts.Export(t.Context(), ref, func(ctx context.Context, stage string) (CaptureResult, error) {
 			close(started)
 			<-release
 			return captureBytes("original capture")(ctx, stage)
@@ -60,14 +60,15 @@ func TestCheckpointArtifactRejectsInvalidExporterOutputs(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			artifacts := Artifacts{Root: t.TempDir()}
 			ref := reference()
-			_, err := artifacts.Export(t.Context(), ref, func(ctx context.Context, stage string) (string, string, error) {
-				path, image, err := captureBytes("captured disk")(ctx, stage)
+			_, err := artifacts.Export(t.Context(), ref, func(ctx context.Context, stage string) (CaptureResult, error) {
+				result, err := captureBytes("captured disk")(ctx, stage)
 				if err != nil {
-					return "", "", err
+					return CaptureResult{}, err
 				}
+				path := result.ArchivePath
 				switch scenario {
 				case "unpinned":
-					image = "alpine:latest"
+					result.PinnedImage = "alpine:latest"
 				case "outside":
 					path = filepath.Join(filepath.Dir(stage), "outside.boxlite")
 					if err := os.WriteFile(path, []byte("outside"), 0600); err != nil {
@@ -106,7 +107,8 @@ func TestCheckpointArtifactRejectsInvalidExporterOutputs(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				return path, image, nil
+				result.ArchivePath = path
+				return result, nil
 			})
 			if err == nil {
 				t.Fatal("invalid capture was published")

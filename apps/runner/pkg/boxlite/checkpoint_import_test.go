@@ -65,22 +65,25 @@ func TestCheckpointImportManifestReplacesOnlyCloudIdentity(t *testing.T) {
 }
 
 func TestCheckpointImportCopiesTheOriginalTarTail(t *testing.T) {
+	const memory = `{"memory_size_bytes":4096,"directory":"memory"}`
 	for _, compressed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "tar", true: "zstd"}[compressed], func(t *testing.T) {
 			var original bytes.Buffer
 			writer := tar.NewWriter(&original)
-			manifest := []byte(`{"version":3,"image":"alpine:old","box_options":{"env":[],"rootfs":{"Image":"alpine:old"}}}`)
+			manifest := []byte(`{"version":8,"image":"alpine:old","box_options":{"env":[],"rootfs":{"Image":"alpine:old"}},"memory_checkpoint":` + memory + `}`)
 			if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0600, Size: int64(len(manifest))}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := writer.Write(manifest); err != nil {
 				t.Fatal(err)
 			}
-			if err := writer.WriteHeader(&tar.Header{Name: "disk.qcow2", Mode: 0600, Size: 4}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := writer.Write([]byte("disk")); err != nil {
-				t.Fatal(err)
+			for _, name := range []string{"disk.qcow2", "memory/vm-memory"} {
+				if err := writer.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: int64(len(name))}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := writer.Write([]byte(name)); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := writer.Close(); err != nil {
 				t.Fatal(err)
@@ -99,6 +102,10 @@ func TestCheckpointImportCopiesTheOriginalTarTail(t *testing.T) {
 			if err := os.WriteFile(path, data, 0600); err != nil {
 				t.Fatal(err)
 			}
+			size, err := readCheckpointMemorySizeBytes(path)
+			if err != nil || size == nil || *size != 4096 {
+				t.Fatalf("memory size: %v %v", size, err)
+			}
 			source := &checkpoint.DownloadedArchive{Path: path, Artifact: checkpoint.Artifact{PinnedImage: "alpine@sha256:" + strings.Repeat("a", 64)}}
 			adapted, err := checkpointImportArchive(source, map[string]string{"BOXLITE_BOX_ID": "target"})
 			if err != nil {
@@ -114,8 +121,12 @@ func TestCheckpointImportCopiesTheOriginalTarTail(t *testing.T) {
 			if err != nil || header.Name != "manifest.json" {
 				t.Fatalf("adapted manifest: %#v %v", header, err)
 			}
-			if _, err := io.Copy(io.Discard, reader); err != nil {
+			var adaptedManifest map[string]json.RawMessage
+			if err := json.NewDecoder(reader).Decode(&adaptedManifest); err != nil {
 				t.Fatal(err)
+			}
+			if string(adaptedManifest["version"]) != "8" || string(adaptedManifest["memory_checkpoint"]) != memory {
+				t.Fatalf("adapted manifest lost version or memory metadata: %v", adaptedManifest)
 			}
 			if _, err := file.Seek(512+(header.Size+511)/512*512, io.SeekStart); err != nil {
 				t.Fatal(err)
@@ -125,11 +136,44 @@ func TestCheckpointImportCopiesTheOriginalTarTail(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !bytes.Equal(copied, tail) {
-				t.Fatal("disk tar bytes were re-encoded")
+				t.Fatal("disk or memory tar bytes were re-encoded")
 			}
 			retained, err := os.ReadFile(path)
 			if err != nil || !bytes.Equal(retained, data) {
 				t.Fatal("source archive changed")
+			}
+		})
+	}
+}
+
+func TestReadCheckpointMemorySizeBytesRejectsInvalidMetadata(t *testing.T) {
+	for _, data := range []string{
+		`{}`,
+		`{"memory_checkpoint":{}}`,
+		`{"memory_checkpoint":{"memory_size_bytes":null}}`,
+		`{"memory_checkpoint":{"memory_size_bytes":-1}}`,
+		`{"memory_checkpoint":{"memory_size_bytes":"1"}}`,
+		`{"memory_checkpoint":{"memory_size_bytes":1.5}}`,
+		`{"memory_checkpoint":{"memory_size_bytes":9223372036854775808}}`,
+	} {
+		t.Run(data, func(t *testing.T) {
+			var archive bytes.Buffer
+			writer := tar.NewWriter(&archive)
+			if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0600, Size: int64(len(data))}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(writer, data); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "source.boxlite")
+			if err := os.WriteFile(path, archive.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if size, err := readCheckpointMemorySizeBytes(path); err == nil || size != nil {
+				t.Fatalf("accepted invalid memory metadata: %v %v", size, err)
 			}
 		})
 	}

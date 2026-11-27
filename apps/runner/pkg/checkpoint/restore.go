@@ -21,6 +21,7 @@ type RestoreRequest struct {
 	Sequence    int64             `json:"targetSequence"`
 	Target      string            `json:"targetBoxId"`
 	Mode        string            `json:"mode"`
+	Kind        string            `json:"kind,omitempty"`
 	Archive     Artifact          `json:"archive"`
 	PlatformEnv map[string]string `json:"platformEnv"`
 }
@@ -34,6 +35,12 @@ func (r RestoreRequest) validate() error {
 		return fmt.Errorf("checkpoint operation must create or recover a target")
 	}
 	if err := validateReference(r.Archive.Reference); err != nil {
+		return err
+	}
+	if !validKind(r.Kind) || (r.Kind != "" && r.Kind != r.Archive.NormalizedKind()) {
+		return fmt.Errorf("invalid checkpoint restore kind %q for archive kind %q", r.Kind, r.Archive.Kind)
+	}
+	if err := validateMemorySize(r.Archive.NormalizedKind(), r.Archive.MemorySizeBytes); err != nil {
 		return err
 	}
 	if r.Archive.SizeBytes <= 0 || !sha256Digest(r.Archive.SHA256) || !pinnedImage(r.Archive.PinnedImage) {
@@ -174,8 +181,8 @@ func (r Restorer) restore(ctx context.Context, lease *TargetLease, request Resto
 		if current.ID != record.PredecessorID {
 			return RestoreResult{}, fmt.Errorf("another native box owns the checkpoint target")
 		}
-		if current.PID != 0 || (current.State != "stopped" && current.State != "failed") {
-			return RestoreResult{}, fmt.Errorf("checkpoint recovery requires a stopped or failed target")
+		if current.PID != 0 || (current.State != "stopped" && current.State != "failed" && current.State != "configured") {
+			return RestoreResult{}, fmt.Errorf("checkpoint recovery requires a stopped, configured, or failed target")
 		}
 	}
 	if err := lease.write(*record); err != nil {
@@ -204,7 +211,7 @@ func (r Restorer) restore(ctx context.Context, lease *TargetLease, request Resto
 		}
 		candidate = &NativeBox{ID: nativeID, State: "stopped"}
 	}
-	if candidate.ID == "" || candidate.ID == record.PredecessorID || candidate.PID != 0 || candidate.State != "stopped" {
+	if candidate.ID == "" || candidate.ID == record.PredecessorID || candidate.PID != 0 || (candidate.State != "stopped" && candidate.State != "configured") {
 		return RestoreResult{}, fmt.Errorf("checkpoint import returned an invalid native identity")
 	}
 	// Publish only a completed import. If synchronization fails after rename,
