@@ -121,9 +121,15 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
 
               try {
                 // Activity is buffered in Redis before the periodic DB flush.
-                // Recheck after taking the state lock so a recent Exec/Files
-                // call cannot be stopped based on a stale SQL timestamp.
-                const lastActivityAt = await this.boxActivityService.getLastActivityAt(box.id)
+                // Recheck under the state lock, then debounce briefly so an
+                // asynchronous Exec/Files activity write can reach Redis.
+                let lastActivityAt = await this.boxActivityService.getLastActivityAt(box.id)
+                if (lastActivityAt && Date.now() - lastActivityAt.getTime() < box.autoStop * 1000) {
+                  return
+                }
+
+                await setTimeout(30)
+                lastActivityAt = await this.boxActivityService.getLastActivityAt(box.id)
                 if (lastActivityAt && Date.now() - lastActivityAt.getTime() < box.autoStop * 1000) {
                   return
                 }

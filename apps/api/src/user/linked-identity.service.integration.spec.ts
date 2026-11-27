@@ -30,6 +30,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
   const cache = new Map<string, string>()
   const redis = {
     del: jest.fn(async (...keys: string[]) => keys.filter((key) => cache.delete(key)).length),
+    eval: jest.fn(async () => 1),
   }
 
   beforeAll(async () => {
@@ -63,6 +64,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
   beforeEach(async () => {
     cache.clear()
     redis.del.mockClear()
+    redis.eval.mockClear()
     for (const table of ['api_key', 'organization_role_assignment', 'organization_user', 'organization_role']) {
       await dataSource.query(`DELETE FROM "${table}"`)
     }

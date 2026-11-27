@@ -21,6 +21,7 @@ import { RegionService } from '../region/services/region.service'
 import { JWT_REGEX } from './constants/jwt-regex.constant'
 import { TtlLruCache } from '../common/utils/ttl-lru-cache.util'
 import { recordApiModuleCacheAccess } from '../common/utils/cache-metrics.util'
+import { Singleflight } from '../common/utils/singleflight.util'
 
 type UserCache = {
   userId: string
@@ -32,6 +33,7 @@ type UserCache = {
 export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implements OnModuleInit {
   private readonly logger = new Logger(ApiKeyStrategy.name)
   private readonly runnerAuthCache = new TtlLruCache<string, AuthContextType>(10_000, 60_000)
+  private readonly validationSingleflight = new Singleflight()
 
   constructor(
     @InjectRedis() private readonly redis: Redis,
@@ -50,6 +52,10 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
   }
 
   async validate(token: string): Promise<AuthContextType | null> {
+    return this.validationSingleflight.run(generateApiKeyHash(token), () => this.validateUncached(token))
+  }
+
+  private async validateUncached(token: string): Promise<AuthContextType | null> {
     this.logger.debug('Validate method called')
 
     // Tokens matching JWT structure are not API keys. Return null so Passport can continue with the JWT strategy.

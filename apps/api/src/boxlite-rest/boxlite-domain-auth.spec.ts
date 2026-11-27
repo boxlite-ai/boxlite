@@ -71,6 +71,14 @@ describe('Domain acquisition authorization', () => {
         cache.set(key, value)
         return 'OK'
       },
+      eval: async (_script: string, _count: number, _generationKey: string, key: string, ...args: string[]) => {
+        if (args.length === 0) {
+          cache.delete(key)
+          return 1
+        }
+        cache.set(key, args[1])
+        return 1
+      },
     }
     const users = {
       findOne: async (userId: string) => ({

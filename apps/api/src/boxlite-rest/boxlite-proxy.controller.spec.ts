@@ -39,7 +39,7 @@ function makeHarness() {
     getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
   const runnerService = {
-    findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
+    findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
   }
   const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
   const tunnelService = {
@@ -153,6 +153,31 @@ describe('BoxliteProxyController', () => {
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
 
+  it('does not wait for the activity write before proxying exec', async () => {
+    const proxyHandler = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
+    const { controller, boxService, runnerService } = makeHarness()
+    boxService.updateLastActivityAt.mockReturnValue(new Promise<void>(() => undefined))
+
+    let settled = false
+    const pending = controller
+      .proxyExec(
+        activeAuth as never,
+        'public-box',
+        { method: 'GET', params: {} } as never,
+        new EventEmitter() as never,
+        jest.fn(),
+      )
+      .then(() => {
+        settled = true
+      })
+    await new Promise(setImmediate)
+
+    expect(settled).toBe(true)
+    expect(runnerService.findProxyTarget).toHaveBeenCalledWith('runner-1')
+    await pending
+  })
+
   it('looks up the runner while auto-resume is still pending', async () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
     const { controller, runnerService, autoResume } = makeHarness()
@@ -172,7 +197,7 @@ describe('BoxliteProxyController', () => {
     )
     await new Promise((resolve) => setImmediate(resolve))
 
-    expect(runnerService.findOne).toHaveBeenCalledWith('runner-1')
+    expect(runnerService.findProxyTarget).toHaveBeenCalledWith('runner-1')
     finishResume!()
     await pending
   })
@@ -182,7 +207,7 @@ describe('BoxliteProxyController', () => {
     let rejectResume!: (error: Error) => void
     let rejectRunner!: (error: Error) => void
     autoResume.ensureReady.mockReturnValue(new Promise((_resolve, reject) => (rejectResume = reject)))
-    runnerService.findOne.mockReturnValue(new Promise((_resolve, reject) => (rejectRunner = reject)))
+    runnerService.findProxyTarget.mockReturnValue(new Promise((_resolve, reject) => (rejectRunner = reject)))
 
     const pending = controller.proxyExec(
       activeAuth as never,

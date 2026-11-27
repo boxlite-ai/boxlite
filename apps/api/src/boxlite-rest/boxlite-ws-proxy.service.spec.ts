@@ -64,7 +64,7 @@ describe('BoxliteWsProxyService', () => {
       updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     }
     const runnerService = {
-      findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
+      findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
     }
     const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
     const userService = {

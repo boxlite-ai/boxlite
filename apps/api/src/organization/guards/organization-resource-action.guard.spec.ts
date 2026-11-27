@@ -49,6 +49,7 @@ function createGuard() {
   ;(guard as any).redis = {
     get: jest.fn().mockResolvedValue(null),
     set: jest.fn().mockResolvedValue('OK'),
+    eval: jest.fn().mockResolvedValue(1),
   }
 
   return {

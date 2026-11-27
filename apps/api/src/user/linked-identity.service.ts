@@ -10,6 +10,7 @@ import { DataSource, EntityManager } from 'typeorm'
 import { apiKeyValidationCacheKey } from '../common/utils/api-key'
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { User } from './user.entity'
+import { invalidateMembershipAccessCaches } from '../organization/services/organization-access-cache.service'
 
 interface Membership {
   organizationId: string
@@ -53,7 +54,7 @@ export class LinkedIdentityService {
       throw new Error(`cannot link ${primaryUserId} to itself`)
     }
 
-    const movedKeyHashes = await this.dataSource.transaction(async (em) => {
+    const moved = await this.dataSource.transaction(async (em) => {
       // Serialise concurrent adoptions of one secondary, so two links
       // racing over the same identity cannot both copy its memberships.
       const secondary = await em
@@ -62,11 +63,11 @@ export class LinkedIdentityService {
         .where('user.id = :id', { id: secondaryUserId })
         .getOne()
       if (!secondary) {
-        return []
+        return { memberships: [] as Membership[], keyHashes: [] as string[] }
       }
 
       await this.ensurePrimaryUser(em, primaryUserId, secondary)
-      const moved = await this.moveMemberships(em, primaryUserId, secondaryUserId)
+      const memberships = await this.moveMemberships(em, primaryUserId, secondaryUserId)
       const keyHashes = await this.moveApiKeys(em, primaryUserId, secondaryUserId)
       await em.query(`UPDATE "organization" SET "createdBy" = $1 WHERE "createdBy" = $2`, [
         primaryUserId,
@@ -74,11 +75,18 @@ export class LinkedIdentityService {
       ])
 
       this.logger.log(
-        `Moved ${moved} membership(s) and ${keyHashes.length} API key(s) from ${secondaryUserId} to ${primaryUserId}`,
+        `Moved ${memberships.length} membership(s) and ${keyHashes.length} API key(s) from ${secondaryUserId} to ${primaryUserId}`,
       )
-      return keyHashes
+      return { memberships, keyHashes }
     })
-    await this.forgetCachedOwners(movedKeyHashes)
+    await this.forgetCachedOwners(moved.keyHashes)
+    await invalidateMembershipAccessCaches(
+      this.redis,
+      moved.memberships.flatMap((membership) => [
+        { organizationId: membership.organizationId, userId: primaryUserId },
+        { organizationId: membership.organizationId, userId: secondaryUserId },
+      ]),
+    )
   }
 
   /**
@@ -123,13 +131,13 @@ export class LinkedIdentityService {
     })
   }
 
-  private async moveMemberships(em: EntityManager, primaryUserId: string, secondaryUserId: string): Promise<number> {
+  private async moveMemberships(em: EntityManager, primaryUserId: string, secondaryUserId: string): Promise<Membership[]> {
     const incoming: Membership[] = await em.query(
       `SELECT "organizationId", "role", "isDefaultForUser" FROM "organization_user" WHERE "userId" = $1`,
       [secondaryUserId],
     )
     if (incoming.length === 0) {
-      return 0
+      return []
     }
     const existing: Membership[] = await em.query(
       `SELECT "organizationId", "role", "isDefaultForUser" FROM "organization_user" WHERE "userId" = $1`,
@@ -174,7 +182,7 @@ export class LinkedIdentityService {
         secondaryUserId,
       ])
     }
-    return incoming.length
+    return incoming
   }
 
   /**

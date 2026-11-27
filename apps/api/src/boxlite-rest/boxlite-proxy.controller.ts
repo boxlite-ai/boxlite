@@ -549,10 +549,10 @@ export class BoxliteProxyController {
     }
 
     if (policy.activity) {
-      // Persist activity before the readiness gate. The lifecycle sweeper rechecks
-      // this Redis-buffered timestamp after taking its state lock, closing the
-      // request-vs-AutoStop race without holding a lock through cold start.
-      await this.boxService
+      // The state-locked sweeper waits briefly and rechecks the Redis buffer
+      // before stopping a stale candidate. Activity remains best-effort and
+      // never delays readiness, auto-resume, or the runner request.
+      void this.boxService
         .updateLastActivityAt(box.id, new Date())
         .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
     }
@@ -582,7 +582,7 @@ export class BoxliteProxyController {
           ? this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit, box)
           : this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit)
         : Promise.resolve()
-    const [resumeResult, runnerResult] = await Promise.allSettled([resume, this.runnerService.findOne(box.runnerId)])
+    const [resumeResult, runnerResult] = await Promise.allSettled([resume, this.runnerService.findProxyTarget(box.runnerId)])
     if (resumeResult.status === 'rejected') throw resumeResult.reason
     if (runnerResult.status === 'rejected') throw runnerResult.reason
     const runner = runnerResult.value
