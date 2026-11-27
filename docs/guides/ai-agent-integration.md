@@ -170,10 +170,12 @@ options = boxlite.BoxOptions(
 
 ### Security presets
 
-`SecurityOptions` has three presets:
+`SecurityOptions` provides profiles for common use cases:
 
 | Preset | Jailer | Seccomp | Resource Limits | Use Case |
 |--------|--------|---------|-----------------|----------|
+| `enabled()` | On | On (Linux) | None | Full host isolation (default) |
+| `disabled()` | Off | Off | None | Debugging sandbox issues |
 | `development()` | Off | Off | None | Debugging sandbox issues |
 | `standard()` | On | On (Linux) | None | General workloads |
 | `maximum()` | On | On (Linux) | `max_open_files=1024`, `max_processes=100` | Untrusted AI code |
