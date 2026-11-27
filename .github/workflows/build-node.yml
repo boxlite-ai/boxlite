@@ -44,7 +44,7 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     needs: config
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -54,6 +54,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          native-build: 'true'
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -122,7 +127,7 @@ jobs:
   test:
     name: Test (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
     needs: [ config, build ]
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-30gbdisk' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -133,6 +138,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -260,12 +268,14 @@ jobs:
     name: Upload to GitHub Release
     needs: [ config, build, test ]
     if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: ubuntu-latest
+    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
     permissions:
       contents: write   # Required to upload assets to GitHub Release
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-boxlite-runner
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

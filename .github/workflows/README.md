@@ -10,6 +10,48 @@ publish chain, the cloud deploy path, the local and cloud end-to-end suites, and
 Shared step bundles live one directory over, in [`.github/actions/`](../actions) — GitHub does not
 support subdirectories under `.github/workflows/`, so composite actions are where reuse goes.
 
+## Runner placement
+
+Eligible Ubuntu x64 jobs use ephemeral workers through the
+[BoxLite CI connection](../../apps/github-ci-runner/README.md).
+The connection needs permission to register workers and quota for the requested
+[resources](../../apps/libs/ci-listener/README.md#resource-labels).
+
+| Runner label | Jobs |
+| --- | --- |
+| `boxlite` | Lightweight lint and setup, Python and Node SDK unit tests, Actions and Python CodeQL, plugin package validation, Go SDK release configuration, status and selected release artifact uploads |
+| `boxlite-2vcpu-4gbmem-30gbdisk` | C/C++ CodeQL and Secret Server PostgreSQL integration |
+| `boxlite-2vcpu-8gbmem-30gbdisk` | Dashboard tests and API client drift |
+| `boxlite-4vcpu-8gbmem-30gbdisk` | Go CodeQL autobuild |
+| `boxlite-4vcpu-16gbmem-30gbdisk` | Go SDK release checks, Node SDK release tests and Node release packaging |
+| `boxlite-4vcpu-16gbmem-64gbdisk` | JavaScript/TypeScript and Rust CodeQL, Clippy, REST volume lifecycle E2E, Nix CLI build and boot, Linux x64 C SDK, Node addon, Python wheel and runtime/CLI builds, standalone guest artifacts and the non-publishing multiarch Box image build |
+| GitHub-hosted Ubuntu | API tests, Go SDK coverage, Rust coverage, selected-ref C SDK builds, protected publishing and runner recovery |
+
+The Node release upload builds and packs the npm packages before attaching them.
+Uploads of prepared C SDK archives, runtime archives and Python wheels use the default worker.
+
+The C SDK workflow installs the BoxLite worker toolchain before source checkout.
+A caller-selected commit or an x64-only recovery build runs on GitHub-hosted Ubuntu.
+Linux ARM64 and macOS matrix jobs use their native platforms. Building an ARM64
+container image with Buildx exercises a different path from native ARM64 SDK tests.
+
+GitHub starts PostgreSQL and Redis services before checkout. The runner must
+provide a working Docker daemon at registration time. Dashboard tests and
+API client drift install Node 22 before enabling Corepack for the Yarn cache.
+API client drift uses 8 GiB for Yarn linking with public PR validation and limits cold installs to four concurrent downloads.
+Dashboard allows eight concurrent downloads on its 8 GiB worker.
+[Docker startup contract](../../apps/libs/ci-listener/README.md#docker-startup).
+
+Rust coverage exercises unprivileged user namespaces on hosted Ubuntu.
+The Nix and REST jobs verify unprivileged namespaces on BoxLite before booting an Alpine box or starting the REST server.
+The BoxLite guest can run the SSH suite under its default namespace policy.
+AppArmor enforcement requires a guest kernel with the AppArmor interface.
+
+The local E2E workflow uses its GCP runner pool for persistent caches and VM
+lifecycle. Deployment recovery uses GitHub-hosted runners. npm publishing uses
+GitHub-hosted capacity for its
+[provenance requirement](https://docs.npmjs.com/generating-provenance-statements/).
+
 ## How they fit together
 
 ```text

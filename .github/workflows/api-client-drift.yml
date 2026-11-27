@@ -23,6 +23,8 @@ on:
       - 'apps/tsconfig.base.json'
       - 'apps/openapitools.json'
       - 'openapi/box.openapi.yaml'
+      - '.github/actions/setup-boxlite-runner/**'
+      - '.github/actions/setup-go/**'
       - '.github/workflows/api-client-drift.yml'
       - '!**/*.md'
 
@@ -36,7 +38,7 @@ concurrency:
 jobs:
   check-generated-clients:
     name: Regenerate API clients and diff
-    runs-on: ubuntu-latest
+    runs-on: boxlite-2vcpu-8gbmem-30gbdisk
     services:
       # generate-openapi.ts boots the full NestJS app; SKIP_CONNECTIONS=true
       # defers DB/queue connections but bootstrap still issues Redis commands
@@ -52,6 +54,16 @@ jobs:
         working-directory: apps
     steps:
       - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+      - name: Install native Node build dependencies
+        run: sudo apt-get install -y --no-install-recommends build-essential python3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ./.github/actions/setup-go
+        with:
+          cache: 'false'
 
       # corepack must be enabled before setup-node's yarn cache probe runs
       - name: Enable corepack (yarn 4)
@@ -69,6 +81,8 @@ jobs:
           distribution: temurin
 
       - name: Install dependencies
+        env:
+          YARN_NETWORK_CONCURRENCY: '4'
         run: yarn install --immutable
 
       - name: Prepare offline app env
