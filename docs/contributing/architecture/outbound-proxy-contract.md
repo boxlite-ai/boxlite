@@ -282,9 +282,10 @@ Protected bootstrap requires automatic removal to be disabled. Only exact
 confirmed receipt settlement can publish `STARTED`. Ordinary Runner state
 observations cannot publish a protected launch, including after retirement.
 
-At the API database boundary, a bootstrap record blocks ordinary stop and Runner
-reassignment writes. The stored generation also blocks ordinary `STARTED` writes
-after retirement. Boxes without these markers retain the ordinary lifecycle path.
+The API can queue a stop by setting `desiredState` to `STOPPED` and marking it
+pending. A bootstrap record blocks ordinary non-`STARTED` state updates and
+Runner reassignment. The stored generation blocks ordinary `STARTED` writes
+after retirement.
 
 The original Runner writes the retired receipt outside the native Box row before
 removing the exact allocation and its volume records. It verifies absence before
