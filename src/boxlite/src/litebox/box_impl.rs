@@ -363,20 +363,33 @@ impl BoxImpl {
     ///
     /// A Running VM may still have an unstarted container; this starts its main command once.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
-        match self.with_operation(self.start_inner()).await {
+        let t0 = Instant::now();
+        match self.with_operation(self.start_inner(t0)).await {
+            Ok(bootstrapped) => {
+                if bootstrapped {
+                    for listener in &self.event_listeners {
+                        listener.on_box_started(&self.config.id);
+                    }
+                    tracing::info!(
+                        box_id = %self.config.id,
+                        elapsed_ms = t0.elapsed().as_millis() as u64,
+                        "Box started"
+                    );
+                }
+                Ok(())
+            }
             Err(BoxliteError::NotFound(_)) if self.shutdown_token.is_cancelled() => {
                 Err(BoxliteError::Stopped(
                     "Handle invalidated after stop(). Use runtime.get() to get a new handle."
                         .into(),
                 ))
             }
-            result => result,
+            Err(error) => Err(error),
         }
     }
 
-    async fn start_inner(&self) -> BoxliteResult<()> {
-        let t0 = Instant::now();
-
+    /// Returns true if this call started init as part of Bootstrap.
+    async fn start_inner(&self, t0: Instant) -> BoxliteResult<bool> {
         // Check if already shutdown (via stop() or runtime shutdown)
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
@@ -397,10 +410,12 @@ impl BoxImpl {
             )));
         }
 
-        // Boot creates the container; running its init is the separate step that
-        // makes `run` docker-shaped — create, attach, then start. `run` slips the
-        // attach between these two calls; every other caller just wants both.
-        let live = self.ensure_booted_locked().await?;
+        // A fresh default-command boot can start init inside Bootstrap. User
+        // commands and containers already created by attach use Container.Start.
+        let live = self.ensure_booted_locked(true).await?;
+        if self.container_start.initialized() {
+            return Ok(status != BoxStatus::Running);
+        }
         let guest_session = live.guest_session.clone();
         let container_start = Arc::clone(&self.container_start);
         let shutdown_token = self.shutdown_token.child_token();
@@ -453,7 +468,7 @@ impl BoxImpl {
                 background_start_finished.notify_waiters();
             }
         });
-        Ok(())
+        Ok(false)
     }
 
     /// Guard every operation that would lazily boot the VM.
@@ -802,7 +817,7 @@ impl BoxImpl {
             )));
         }
         self.live
-            .get_or_try_init(|| self.init_live_state(false))
+            .get_or_try_init(|| self.init_live_state(false, false))
             .await
     }
 
@@ -887,7 +902,7 @@ impl BoxImpl {
         // through the restart pipeline and spawn a new VM — exactly what
         // stop() must NOT do.
         let should_attach = self.state.read().status == BoxStatus::Running;
-        if should_attach && let Ok(live) = self.ensure_booted_locked().await {
+        if should_attach && let Ok(live) = self.ensure_booted_locked(false).await {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
             // Either way the teardown is identical:
@@ -1257,11 +1272,9 @@ impl BoxImpl {
 
     /// The implicit-boot funnel: boot the box and make sure its container's init
     /// is running. `exec`, `metrics`, `copy_into` and `copy_out` pass through
-    /// here and, as before, get a box whose container is *running* — booting and
-    /// running init used to be one pipeline step. Now booting only creates the
-    /// container, so this starts it (once, and safely alongside an explicit
-    /// `start()`). `attach` deliberately does *not* use this: it boots without
-    /// running init, so a client can attach before `start()`.
+    /// here and get a box whose container is *running*. Bootstrap can start a
+    /// default command during boot; otherwise this starts it exactly once.
+    /// `attach` deliberately boots without starting init.
     async fn live_state(&self) -> BoxliteResult<&LiveState> {
         let live = self
             .with_operation(async {
@@ -1269,15 +1282,14 @@ impl BoxImpl {
                     return Err(BoxliteError::Stopped("Box handle has been stopped".into()));
                 }
                 self.ensure_usable_without_rerunning_main("use")?;
-                self.ensure_booted_locked().await
+                self.ensure_booted_locked(true).await
             })
             .await?;
         self.ensure_container_started(live).await?;
         Ok(live)
     }
 
-    /// Boot the box to the point its container is *created* — VM up, guest
-    /// connected, `Container.Init` done — without running init.
+    /// Boot the box without running init, so the caller can attach first.
     ///
     /// Refuses to hand back a **spent** handle. A box can now stop *itself* — its
     /// main command exits, the guest powers the VM off, the watcher marks it
@@ -1294,13 +1306,13 @@ impl BoxImpl {
             if self.shutdown_token.is_cancelled() {
                 return Err(BoxliteError::Stopped("Box handle has been stopped".into()));
             }
-            self.ensure_booted_locked().await
+            self.ensure_booted_locked(false).await
         })
         .await
     }
 
     /// Caller owns lifecycle admission, including when stop attaches for teardown.
-    async fn ensure_booted_locked(&self) -> BoxliteResult<&LiveState> {
+    async fn ensure_booted_locked(&self, start_container: bool) -> BoxliteResult<&LiveState> {
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
@@ -1312,7 +1324,7 @@ impl BoxImpl {
         }
 
         self.live
-            .get_or_try_init(|| self.init_live_state(true))
+            .get_or_try_init(|| self.init_live_state(true, start_container))
             .await
     }
 
@@ -1356,11 +1368,12 @@ impl BoxImpl {
         Ok(())
     }
 
-    /// Run the container's init exactly once. Booting only creates the container;
-    /// this is the separate `Container.Start`. Single-flighted via `OnceCell`,
-    /// so the implicit-boot funnel and an explicit `start()` cannot double-run it,
-    /// and a box reattached with init already running pre-sets the cell.
+    /// Run the container's init exactly once. Bootstrap and reattach pre-set
+    /// the cell; otherwise it single-flights Container.Start.
     async fn ensure_container_started(&self, live: &LiveState) -> BoxliteResult<()> {
+        if self.container_start.initialized() && !self.shutdown_token.is_cancelled() {
+            return Ok(());
+        }
         Self::ensure_container_started_owned(
             Arc::clone(&self.container_start),
             live.guest_session.clone(),
@@ -1432,7 +1445,11 @@ impl BoxImpl {
     ///
     /// Note: Lock is allocated in create(), not here. DB persistence also
     /// happens in create().
-    async fn init_live_state(&self, allow_start: bool) -> BoxliteResult<LiveState> {
+    async fn init_live_state(
+        &self,
+        allow_start: bool,
+        start_container: bool,
+    ) -> BoxliteResult<LiveState> {
         use super::BoxBuilder;
         use std::sync::Arc;
 
@@ -1458,18 +1475,18 @@ impl BoxImpl {
         let mut config = self.config.clone();
         config.options.disk_size_gb = persisted.disk_size_gb.or(config.options.disk_size_gb);
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), config, state)?;
+        let auto_start = start_container && !self.has_user_main_command();
+        if !adopting_running {
+            // Rotate the *previous* run's exit file before the new guest can
+            // write one of its own (a default command can exit in Bootstrap).
+            crate::runtime::rt_impl::stash_exit_file(&self.layout);
+        }
         let crate::litebox::init::BuiltBox {
             live: live_state,
             guard: mut cleanup_guard,
+            container_started,
             resolved_image,
-        } = builder.build().await?;
-
-        // The box is up. If we adopted one whose init was already running, that
-        // init needs no `Container.Start`; recording it now keeps
-        // `ensure_container_started` a no-op for this handle.
-        if adopting_running {
-            let _ = self.container_start.set(());
-        }
+        } = builder.build(auto_start).await?;
 
         // Read PID from file (single source of truth) and update state.
         //
@@ -1571,10 +1588,9 @@ impl BoxImpl {
         // All operations succeeded - disarm the cleanup guard
         cleanup_guard.disarm();
 
-        // Archive any leftover crash artifact from a prior lifecycle so
-        // the next attach preflight doesn't trip on stale evidence.
-        // Stash (rename → exit.previous) preserves forensic data.
-        crate::runtime::rt_impl::stash_exit_file(&self.layout);
+        if adopting_running || container_started {
+            let _ = self.container_start.set(());
+        }
 
         tracing::info!(
             box_id = %self.config.id,
@@ -1701,7 +1717,7 @@ impl BoxImpl {
     /// Best-effort guest filesystem quiesce (FIFREEZE) with timeout.
     /// Returns true if quiesce succeeded.
     async fn guest_quiesce(&self) -> bool {
-        let Ok(live) = self.ensure_booted_locked().await else {
+        let Ok(live) = self.ensure_booted_locked(false).await else {
             tracing::warn!("Cannot quiesce: LiveState not available");
             return false;
         };
@@ -1735,7 +1751,7 @@ impl BoxImpl {
 
     /// Best-effort guest filesystem thaw (FITHAW) with timeout.
     async fn guest_thaw(&self) {
-        let Ok(live) = self.ensure_booted_locked().await else {
+        let Ok(live) = self.ensure_booted_locked(false).await else {
             tracing::warn!("Cannot thaw: LiveState not available");
             return;
         };
@@ -1903,7 +1919,7 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
                     "outbound policy updates require a running box".into(),
                 ));
             }
-            let live = self.ensure_booted_locked().await?;
+            let live = self.ensure_booted_locked(false).await?;
             let backend = live.network.as_deref().ok_or_else(|| {
                 BoxliteError::Unsupported("box networking is disabled".into())
             })?;

@@ -465,7 +465,7 @@ impl ExecutionState {
                     break;
                 }
             }
-            tracing::info!(%execution_id, "execution output forwarding ended");
+            tracing::debug!(%execution_id, "execution output forwarding ended");
         });
 
         let (task_to_abort, displaced) = {

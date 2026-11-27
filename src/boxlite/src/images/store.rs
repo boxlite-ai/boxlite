@@ -28,7 +28,7 @@ use oci_client::manifest::{
     ImageIndexEntry, OciDescriptor, OciImageIndex, OciImageManifest as ClientOciImageManifest,
 };
 use oci_client::secrets::RegistryAuth as OciRegistryAuth;
-use oci_spec::image::MediaType;
+use oci_spec::image::{ImageConfiguration, MediaType};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::path::PathBuf;
@@ -468,6 +468,7 @@ impl ImageStore {
             manifest_digest: manifest_digest.to_string(),
             layers,
             config_digest: config_digest_str,
+            verified_config: None,
             diff_ids: Vec::new(), // Populated later if config is available
         })
     }
@@ -676,34 +677,44 @@ impl ImageStore {
             }
         };
 
-        // Load diff_ids from config. A cached config that can't be read/parsed
-        // errors here rather than yielding empty diff_ids (which would silently
-        // skip DiffID verification at extraction time).
-        let diff_ids = self.load_diff_ids_from_config(inner, &config_digest)?;
-
+        let config = self.verified_config(inner, &cached.manifest_digest, &config_digest)?;
         Ok(ImageManifest {
             manifest_digest: cached.manifest_digest.clone(),
             layers,
             config_digest,
-            diff_ids,
+            diff_ids: Self::config_diff_ids(&config),
+            verified_config: Some(config),
         })
     }
 
-    /// Load `rootfs.diff_ids` from the image config on disk.
-    ///
-    /// Returns the DiffIDs the config declares — possibly an empty list, if the
-    /// config genuinely declares none. Returns `Err` when the config blob can't
-    /// be read, fails its digest check, or can't be parsed: none of these may be
-    /// silently mapped to an empty list, because downstream
-    /// `ImageObject::verify_diff_ids` treats an empty list as "nothing to verify"
-    /// and would skip DiffID verification entirely — disabling the integrity
-    /// check on a config we never actually trusted. Distinguishing "config says
-    /// none" from "we couldn't load/trust the config" keeps that decision honest.
-    fn load_diff_ids_from_config(
+    fn verified_config(
         &self,
         inner: &ImageStoreInner,
+        manifest_digest: &str,
         config_digest: &str,
-    ) -> BoxliteResult<Vec<String>> {
+    ) -> BoxliteResult<Arc<ImageConfiguration>> {
+        // The normal ref-cache hit returns the Arc directly. On an alias miss,
+        // reuse the same manifest's config without a second independent cache:
+        // index mutations already invalidate the relevant verified entries.
+        if let Some(config) = inner.verified.values().find_map(|entry| {
+            let manifest = &entry.manifest;
+            if manifest.manifest_digest == manifest_digest
+                && manifest.config_digest == config_digest
+            {
+                manifest.verified_config.as_ref()
+            } else {
+                None
+            }
+        }) {
+            return Ok(Arc::clone(config));
+        }
+        Self::read_verified_config(inner, config_digest).map(Arc::new)
+    }
+
+    fn read_verified_config(
+        inner: &ImageStoreInner,
+        config_digest: &str,
+    ) -> BoxliteResult<ImageConfiguration> {
         use sha2::{Digest, Sha256};
 
         let config_path = inner.storage.config_path(config_digest);
@@ -729,20 +740,31 @@ impl ImageStore {
             )));
         }
 
-        let image_config: oci_spec::image::ImageConfiguration =
-            serde_json::from_slice(&config_bytes).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "failed to parse image config {} for diff_ids: {}",
-                    config_digest, e
-                ))
-            })?;
+        serde_json::from_slice(&config_bytes).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "failed to parse image config {} for diff_ids: {}",
+                config_digest, e
+            ))
+        })
+    }
 
-        Ok(image_config
+    fn config_diff_ids(config: &ImageConfiguration) -> Vec<String> {
+        config
             .rootfs()
             .diff_ids()
             .iter()
             .map(|d| d.to_string())
-            .collect())
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn load_diff_ids_from_config(
+        &self,
+        inner: &ImageStoreInner,
+        config_digest: &str,
+    ) -> BoxliteResult<Vec<String>> {
+        Self::read_verified_config(inner, config_digest)
+            .map(|config| Self::config_diff_ids(&config))
     }
 
     // ========================================================================
@@ -796,13 +818,16 @@ impl ImageStore {
         self.download_config(&client, reference, &image_manifest.config_digest)
             .await?;
 
-        // Step 5b: Parse diff_ids from config for DiffID verification.
-        // load_diff_ids_from_config re-verifies the config digest, so a
-        // read/digest/parse failure here is a genuine fault and fails the pull.
+        // Step 5b: Verify and parse once, for both DiffID verification and startup.
         {
             let inner = self.inner.read().await;
-            image_manifest.diff_ids =
-                self.load_diff_ids_from_config(&inner, &image_manifest.config_digest)?;
+            let config = self.verified_config(
+                &inner,
+                &image_manifest.manifest_digest,
+                &image_manifest.config_digest,
+            )?;
+            image_manifest.diff_ids = Self::config_diff_ids(&config);
+            image_manifest.verified_config = Some(config);
         }
 
         // Step 6: Index it under the ref it was pulled by and the digest it resolved to
@@ -829,14 +854,28 @@ impl ImageStore {
         let by_ref = reference.whole();
         let by_digest = digest_key(reference, manifest);
         let mut inner = self.inner.write().await;
-        if by_digest != by_ref {
+        let keep_first = if by_digest != by_ref {
             let has_first = inner.verified.contains_key(&by_ref);
             inner.upsert(&by_digest, manifest)?;
-            if has_first || self.load_cached_from_disk(&inner, &by_ref)?.is_some() {
-                return Ok(());
-            }
+            has_first || self.load_cached_from_disk(&inner, &by_ref)?.is_some()
+        } else {
+            false
+        };
+        if !keep_first {
+            inner.upsert(&by_ref, manifest)?;
         }
-        inner.upsert(&by_ref, manifest)
+        if manifest.verified_config.is_some() {
+            let entry = || VerifiedCachedImage {
+                manifest: manifest.clone(),
+                digest_ref: by_digest.clone(),
+            };
+            if !keep_first && by_ref != by_digest {
+                inner.verified.insert(by_ref, entry());
+            }
+            let digest_entry = entry();
+            inner.verified.insert(by_digest, digest_entry);
+        }
+        Ok(())
     }
 
     // ========================================================================
@@ -858,6 +897,7 @@ impl ImageStore {
                     manifest_digest,
                     layers,
                     config_digest,
+                    verified_config: None,
                     diff_ids: Vec::new(), // Populated after config download
                 })
             }
@@ -949,6 +989,7 @@ impl ImageStore {
                     manifest_digest: platform_digest,
                     layers,
                     config_digest,
+                    verified_config: None,
                     diff_ids: Vec::new(), // Populated after config download
                 })
             }
@@ -2298,6 +2339,7 @@ pub(super) mod tests {
                 size: 0,
             }],
             config_digest,
+            verified_config: None,
             diff_ids: vec![],
         };
         store

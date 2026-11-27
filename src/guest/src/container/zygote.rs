@@ -200,7 +200,7 @@ impl Zygote {
             Ok(ForkResult::Parent { child }) => {
                 // Parent: close child's end, return handle
                 drop(child_sock);
-                tracing::info!(zygote_pid = child.as_raw(), "zygote started");
+                tracing::debug!(zygote_pid = child.as_raw(), "zygote started");
                 Ok(Self {
                     sock: Mutex::new(parent_sock),
                 })
@@ -314,14 +314,18 @@ fn serve(sock: OwnedFd) -> ! {
                     }
                 };
                 if let Err(e) = send_response(fd, &response) {
-                    eprintln!("[zygote] send_response failed: {e}");
+                    if crate::boot_timing_enabled() {
+                        eprintln!("[zygote] send_response failed: {e}");
+                    }
                     std::process::exit(1);
                 }
             }
             Err(e) => {
                 // Parent closed socket or IPC error — exit cleanly.
                 // This happens during normal guest agent shutdown.
-                eprintln!("[zygote] recv_request ended: {e}");
+                if crate::boot_timing_enabled() {
+                    eprintln!("[zygote] recv_request ended: {e}");
+                }
                 std::process::exit(0);
             }
         }
@@ -540,15 +544,19 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
 
     // Greppable from the guest console: proves init creation actually routed
     // through the zygote rather than silently reverting to an in-guest build.
-    match &result {
-        BuildResult::Spawned { pid } => eprintln!(
-            "[zygote] init build: container_id={} pid={}",
-            spec.container_id, pid
-        ),
-        BuildResult::Failed { error } | BuildResult::Rejected { message: error, .. } => eprintln!(
-            "[zygote] init build failed: container_id={} error={}",
-            spec.container_id, error
-        ),
+    if crate::boot_timing_enabled() {
+        match &result {
+            BuildResult::Spawned { pid } => eprintln!(
+                "[zygote] init build: container_id={} pid={}",
+                spec.container_id, pid
+            ),
+            BuildResult::Failed { error } | BuildResult::Rejected { message: error, .. } => {
+                eprintln!(
+                    "[zygote] init build failed: container_id={} error={}",
+                    spec.container_id, error
+                )
+            }
+        }
     }
     result
 }

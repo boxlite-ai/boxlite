@@ -1,20 +1,84 @@
 //! Guest service implementation.
 //!
-//! Handles guest initialization and management (Init, Ping, Shutdown,
-//! Quiesce, Thaw, SyncClock and ResizeFilesystem RPCs).
+//! Handles guest initialization and management (Bootstrap, Init, Ping,
+//! Shutdown, Quiesce, Thaw, SyncClock and ResizeFilesystem RPCs).
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
-    guest_init_response, Guest as GuestService, GuestInitError, GuestInitRequest,
-    GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse, QuiesceRequest,
-    QuiesceResponse, ResizeFilesystemRequest, ResizeFilesystemResponse, ShutdownRequest,
-    ShutdownResponse, SyncClockRequest, SyncClockResponse, ThawRequest, ThawResponse,
+    container_init_response, guest_init_response, Container as ContainerService,
+    Guest as GuestService, GuestBootstrapRequest, GuestBootstrapResponse, GuestInitError,
+    GuestInitRequest, GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse,
+    QuiesceRequest, QuiesceResponse, ResizeFilesystemRequest, ResizeFilesystemResponse,
+    ShutdownRequest, ShutdownResponse, SyncClockRequest, SyncClockResponse, ThawRequest,
+    ThawResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
+fn guest_info() -> PingResponse {
+    PingResponse {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        safe_managed_volume_sub_path: true,
+    }
+}
+
 #[tonic::async_trait]
 impl GuestService for GuestServer {
+    async fn bootstrap(
+        &self,
+        request: Request<GuestBootstrapRequest>,
+    ) -> Result<Response<GuestBootstrapResponse>, Status> {
+        let req = request.into_inner();
+        let guest_init = req
+            .guest_init
+            .ok_or_else(|| Status::invalid_argument("Missing guest_init in Bootstrap request"))?;
+        let container_init = req.container_init.ok_or_else(|| {
+            Status::invalid_argument("Missing container_init in Bootstrap request")
+        })?;
+        let info = guest_info();
+        let mut response = GuestBootstrapResponse {
+            guest_version: info.version,
+            safe_volume_sub_path: info.safe_managed_volume_sub_path,
+            ..Default::default()
+        };
+
+        match GuestService::init(self, Request::new(guest_init))
+            .await?
+            .into_inner()
+            .result
+        {
+            Some(guest_init_response::Result::Success(_)) => {}
+            Some(guest_init_response::Result::Error(error)) => {
+                response.error = format!("Guest init failed: {}", error.reason);
+                return Ok(Response::new(response));
+            }
+            None => return Err(Status::internal("GuestInit response missing result")),
+        }
+
+        let init = ContainerService::init(self, Request::new(container_init))
+            .await
+            .map_err(|status| {
+                // Unimplemented on Bootstrap itself is the legacy fallback
+                // signal, not something to return after Guest.Init has run.
+                if status.code() == tonic::Code::Unimplemented {
+                    Status::failed_precondition(status.message())
+                } else {
+                    status
+                }
+            })?
+            .into_inner();
+        if req.auto_start {
+            if let Some(container_init_response::Result::Success(success)) = &init.result {
+                match self.run_container_init(&success.container_id).await {
+                    Ok(()) => response.started = true,
+                    Err(error) => response.error = error,
+                }
+            }
+        }
+        response.container_init = Some(init);
+        Ok(Response::new(response))
+    }
+
     /// Initialize guest environment.
     ///
     /// This must be called first after connection. It:
@@ -28,6 +92,10 @@ impl GuestService for GuestServer {
     ) -> Result<Response<GuestInitResponse>, Status> {
         let req = request.into_inner();
         info!("Received guest init request");
+
+        // Bootstrap also calls this method. Neither path can mount volumes or
+        // configure networking before guest boot preparation has finished.
+        self.wait_for_boot_prep().await?;
 
         // Check if already initialized
         let mut init_state = self.init_state.lock().await;
@@ -86,10 +154,9 @@ impl GuestService for GuestServer {
 
     async fn ping(&self, _request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
         debug!("Received ping request");
-        Ok(Response::new(PingResponse {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            safe_managed_volume_sub_path: true,
-        }))
+        // Ping reports a prepared guest; the notification only reports a live listener.
+        self.wait_for_boot_prep().await?;
+        Ok(Response::new(guest_info()))
     }
 
     async fn shutdown(
@@ -193,6 +260,7 @@ impl GuestService for GuestServer {
         _request: Request<QuiesceRequest>,
     ) -> Result<Response<QuiesceResponse>, Status> {
         info!("Received quiesce request — freezing filesystems");
+        self.wait_for_boot_prep().await?;
 
         let frozen = crate::storage::fsfreeze::freeze_filesystems();
         let frozen_count = frozen.len() as u32;

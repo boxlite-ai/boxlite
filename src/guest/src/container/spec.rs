@@ -216,7 +216,7 @@ pub fn create_oci_spec(
     cgroup: ContainerCgroup,
 ) -> BoxliteResult<Spec> {
     let caps = capabilities.to_oci()?;
-    tracing::info!(
+    tracing::debug!(
         container_id,
         mount_source = mount_override.source,
         mount_options = ?mount_override.options,

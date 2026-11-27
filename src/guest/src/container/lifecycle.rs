@@ -66,7 +66,10 @@ mod pty_init_tests;
 pub struct Container {
     id: String,
     state_root: PathBuf,
+    /// PID returned by the zygote at creation, before init starts running.
+    init_pid: Option<nix::unistd::Pid>,
     bundle_path: PathBuf,
+    rootfs: PathBuf,
     env: HashMap<String, String>,
     /// Resolved (uid, gid) from image USER directive, propagated to exec commands.
     user: (u32, u32),
@@ -212,30 +215,30 @@ impl Container {
             cgroup,
         )?;
 
-        let stdio = if tty {
+        let (stdio, init_pid) = if tty {
             // libcontainer allocates the PTY while creating init and passes the
             // master back over this socket, so the socket must exist before the
             // build and be read after it — a PTY, unlike a pipe, cannot be made
             // before the process that owns the other end.
             let socket = console_socket::ConsoleSocket::new(container_id)?;
-            start::create_container_with_stdio(
+            let init_pid = start::create_container_with_stdio(
                 container_id,
                 &state_root,
                 &bundle.path,
                 start::InitIoSetup::Console(socket.path().to_string()),
             )?;
-            ContainerStdio::pty(socket.receive_pty_master()?)
+            (ContainerStdio::pty(socket.receive_pty_master()?), init_pid)
         } else {
             // Pipes exist before the container does. The guest holds stdin's
             // write-end, so init's read() blocks instead of seeing EOF.
             let (stdio, init_fds) = ContainerStdio::pipes()?;
-            start::create_container_with_stdio(
+            let init_pid = start::create_container_with_stdio(
                 container_id,
                 &state_root,
                 &bundle.path,
                 start::InitIoSetup::Pipes(init_fds),
             )?;
-            stdio
+            (stdio, init_pid)
         };
 
         // Note: init is *created*, not started. `run_init()` does that, so a
@@ -244,7 +247,9 @@ impl Container {
         Ok(Self {
             id: container_id.to_string(),
             state_root,
+            init_pid: Some(init_pid),
             bundle_path: bundle.path,
+            rootfs: rootfs.to_path_buf(),
             env: env_map,
             user: (uid, gid),
             mount_destinations: bundle.mount_destinations,
@@ -270,9 +275,6 @@ impl Container {
     /// caller and the late one observes Running. A Created container (the
     /// zombie, or a start still in flight behind the lock) proceeds to start.
     pub fn run_init(&self) -> BoxliteResult<()> {
-        if self.is_running() {
-            return Ok(());
-        }
         start::start_container(&self.id, &self.state_root)
     }
 
@@ -408,22 +410,9 @@ impl Container {
         Arc::clone(&self.attacher)
     }
 
-    /// PID of the container's init process, from libcontainer state.
-    ///
-    /// `None` if the state can't be loaded or init never started.
+    /// PID assigned at creation. This is not a liveness check.
     pub fn init_pid(&self) -> Option<nix::unistd::Pid> {
-        let container_state_path = self.container_state_path();
-        match LibContainer::load(container_state_path) {
-            Ok(libcontainer) => libcontainer.pid(),
-            Err(e) => {
-                tracing::warn!(
-                    container_id = %self.id,
-                    error = %e,
-                    "Failed to load container state for init pid"
-                );
-                None
-            }
-        }
+        self.init_pid
     }
 
     /// Test-only constructor: a container whose libcontainer state must be
@@ -439,6 +428,8 @@ impl Container {
         Self {
             id: id.to_string(),
             state_root,
+            init_pid: None,
+            rootfs: bundle_path.join("rootfs"),
             bundle_path,
             env: HashMap::new(),
             user: (0, 0),
@@ -457,8 +448,8 @@ impl Container {
     /// is nobody else's business, so it is resolved here rather than leaking a
     /// tuple of fds and a terminal flag to the service layer.
     ///
-    /// Returns `None` if init has no pid (it is gone) or its stdio was already
-    /// taken. Callable once.
+    /// Returns `None` if no init PID was assigned or its stdio was already
+    /// taken. Callable once, immediately after creation.
     pub fn take_init_exec_handle(&mut self) -> BoxliteResult<Option<ExecHandle>> {
         let Some(pid) = self.init_pid() else {
             return Ok(None);
@@ -514,7 +505,7 @@ impl Container {
             self.state_root.clone(),
             self.env.clone(),
             self.user,
-            self.bundle_path.join("rootfs"),
+            self.rootfs.clone(),
             self.capabilities.clone(),
         )
     }
@@ -572,17 +563,19 @@ impl Container {
                     diagnostics.push(format!("PID: {}", pid));
 
                     // Try to get process state information
-                    #[cfg(target_os = "linux")]
-                    {
-                        if let Ok(proc) = procfs::process::Process::new(pid.as_raw()) {
-                            if let Ok(stat) = proc.stat() {
-                                if let Ok(state) = stat.state() {
-                                    diagnostics.push(format!("Process state: {:?}", state));
-                                }
+                    match std::fs::read(format!("/proc/{pid}/stat")) {
+                        Ok(stat) => {
+                            if let Some(state) =
+                                crate::service::exec::process_instance::stat_fields(&stat)
+                                    .and_then(|mut fields| fields.next())
+                            {
+                                diagnostics.push(format!("Process state: {state}"));
                             }
-                        } else {
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                             diagnostics.push("Process: no longer exists (exited)".to_string());
                         }
+                        Err(_) => {}
                     }
                 } else {
                     diagnostics.push(
@@ -760,12 +753,14 @@ mod tests {
             id: "mount-bookkeeping".into(),
             state_root: root.path().join("state"),
             bundle_path: root.path().join("bundle"),
+            rootfs: root.path().join("bundle/rootfs"),
             env: HashMap::new(),
             user: (0, 0),
             mount_destinations: vec!["/data".into(), "/data/oci-child".into(), "/database".into()],
             attacher: Arc::default(),
             capabilities: CapabilitySet::default(),
             stdio: ContainerStdio::pipes().unwrap().0,
+            init_pid: None,
             is_shutdown: std::sync::atomic::AtomicBool::new(true),
         };
         container.record_mount_destination("/data".into());
@@ -865,12 +860,14 @@ mod tests {
             id,
             state_root,
             bundle_path: dir.path().join("bundle"),
+            rootfs: dir.path().join("bundle/rootfs"),
             env: HashMap::new(),
             user: (0, 0),
             mount_destinations: Vec::new(),
             attacher: Arc::default(),
             capabilities: CapabilitySet::default(),
             stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
+            init_pid: None,
             // Drop must not SIGKILL the recorded pid — it is this test process.
             is_shutdown: std::sync::atomic::AtomicBool::new(true),
         };

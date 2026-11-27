@@ -69,7 +69,7 @@ impl GuestServer {
         &self,
         exec_id: &str,
     ) -> Result<mpsc::Receiver<Result<ExecOutput, Status>>, ExecutionError> {
-        info!(execution_id = %exec_id, "attach request");
+        debug!(execution_id = %exec_id, "attach request");
         match self.execution_lookup(exec_id).await? {
             ExecutionLookup::Live(state) => match state.attach(exec_id).await {
                 Ok(output) => Ok(output),
@@ -633,9 +633,8 @@ async fn spawn_with_executor(
                     format!("Invalid {}: missing container_id", executor_const::ENV_VAR),
                 ));
             }
-            // Caller-controllable (a client can override BOXLITE_EXECUTOR in its
-            // exec env) and joined into a filesystem path below, so require a
-            // single normal component — `..`/`/…` must not escape containers/.
+            // BOXLITE_EXECUTOR can be overridden by the caller. Require the
+            // same single-component ID shape as the container's state paths.
             if !is_single_path_component(container_id) {
                 return Err(spawn_error(
                     execution_id,
@@ -650,26 +649,6 @@ async fn spawn_with_executor(
                 container_id = %container_id,
                 "Using ContainerExecutor"
             );
-            // Refuse cleanly when the container's init has already exited
-            // (docker semantics: no exec in a stopped container). Without
-            // this, the tenant build reaches libcontainer against a dead
-            // init and surfaces an opaque procfs internal error.
-            //
-            // Presence is the signal, not parseability: a torn record still
-            // means init is gone, and letting a bad parse fall through here
-            // would hand the exec straight back to the panic.
-            let exit_file = server.layout.shared().container(container_id).exit_file();
-            if exit_file.exists() {
-                let how = boxlite_shared::layout::ExitRecord::read(&exit_file).map_or_else(
-                    || "init exited".to_string(),
-                    |record| format!("init exited with code {}", record.exit_code),
-                );
-                return Err(spawn_error(
-                    execution_id,
-                    format!("container is not running: {how}"),
-                ));
-            }
-
             // Look up container from registry
             let container_arc = {
                 let containers_guard = server.containers.lock().await;
@@ -680,6 +659,14 @@ async fn spawn_with_executor(
                     )
                 })?
             };
+            // The reaper fills the slot before the exit action writes to
+            // virtiofs. No exec in a container whose init has exited.
+            if let Some(code) = server.init_exit_code(container_id).await {
+                return Err(spawn_error(
+                    execution_id,
+                    format!("container is not running: init exited with code {code}"),
+                ));
+            }
             let executor = ContainerExecutor::new(container_arc);
             let container_ref = executor.container_ref();
             let spawn = match ssh_workload.as_ref() {

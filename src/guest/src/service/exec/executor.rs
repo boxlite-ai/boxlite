@@ -98,7 +98,7 @@ impl ContainerExecutor {
             SpawnResult::PtyPending(pending) => pending.finish().map_err(SpawnFailure::from),
         };
 
-        tracing::info!(
+        tracing::debug!(
             elapsed_ms = start.elapsed().as_millis() as u64,
             program = %req.program,
             "exec: spawn completed"

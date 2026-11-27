@@ -1,10 +1,7 @@
 //! Task: Guest initialization.
 //!
-//! Sends init configuration to the guest and *creates* the container. Running
-//! its init is a separate, host-driven step (`Container.Start`), so a client can
-//! attach to the created-but-not-started session first and miss none of its
-//! output. Builds guest volumes from the volume manager, uses rootfs config from
-//! the vmm_config stage.
+//! Configures the guest and creates its container. For boots that do not
+//! need attach-before-start, Bootstrap also releases the container's init.
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::net::constants::{GATEWAY_IP, GUEST_CIDR, GUEST_INTERFACE};
@@ -16,7 +13,12 @@ use crate::runtime::cpu_count::{CPU_PERIOD_US, CpuCount};
 use crate::runtime::options::BoxOptions;
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use boxlite_shared::{ContainerDevice, ContainerResources};
+use boxlite_shared::{
+    ContainerDevice, ContainerInitRequest, ContainerResources, GuestBootstrapRequest,
+    GuestInitRequest,
+};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Oldest guest release that honors `advanced.capabilities` on
 /// `Container.Init`. An earlier guest drops the field and starts the container
@@ -38,7 +40,10 @@ const MIN_PRIVILEGED_CONTAINER_GUEST_VERSION: crate::portal::interfaces::guest::
 /// with no `/dev/kvm` while the caller believes nesting was granted.
 const MIN_DEVICE_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
 
-pub struct GuestInitTask;
+pub struct GuestInitTask {
+    pub auto_start: bool,
+    pub started: Arc<AtomicBool>,
+}
 
 struct GuestBootstrapConfig {
     guest: GuestInitConfig,
@@ -122,9 +127,10 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             )
         };
 
-        run_guest_init(guest_session.clone(), bootstrap)
+        let started = run_guest_init(guest_session.clone(), bootstrap, self.auto_start)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+        self.started.store(started, Ordering::Relaxed);
 
         let mut ctx = ctx.lock().await;
         ctx.guest_session = Some(guest_session);
@@ -149,53 +155,59 @@ fn requires_safe_volume_sub_path(mounts: &[crate::volumes::ContainerMount]) -> b
     })
 }
 
-/// Initialize the guest and create the container (init is *not* run here).
+/// Returns whether Bootstrap also started the container.
 async fn run_guest_init(
     guest_session: GuestSession,
     bootstrap: GuestBootstrapConfig,
-) -> BoxliteResult<()> {
-    // Step 1: Guest Init (volumes + network)
-    tracing::info!("Sending guest initialization request");
+    auto_start: bool,
+) -> BoxliteResult<bool> {
     let mut guest_interface = guest_session.guest().await?;
-    if !bootstrap.container.advanced.capabilities.is_empty() {
-        guest_interface
-            .require_min_version(MIN_CAPABILITY_GUEST_VERSION)
-            .await?;
+    let advanced = &bootstrap.container.advanced;
+    let minimum = [
+        (!advanced.capabilities.is_empty()).then_some(MIN_CAPABILITY_GUEST_VERSION),
+        // Older guests silently retain hardened defaults in privileged mode.
+        advanced
+            .linux
+            .readonly_paths
+            .is_empty()
+            .then_some(MIN_PRIVILEGED_CONTAINER_GUEST_VERSION),
+        (!bootstrap.container.devices.is_empty()).then_some(MIN_DEVICE_GUEST_VERSION),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
+    let needs_safe_subpaths = requires_safe_volume_sub_path(&bootstrap.container.mounts);
+    let guest_init = GuestInitRequest::from(bootstrap.guest);
+    let container_init = ContainerInitRequest::from(bootstrap.container);
+    let started = guest_interface
+        .bootstrap(GuestBootstrapRequest {
+            guest_init: Some(guest_init.clone()),
+            container_init: Some(container_init.clone()),
+            auto_start,
+        })
+        .await?;
+
+    // A Bootstrap-capable guest honors these fields by contract and returns
+    // its capabilities inline. On older guests, Ping *before* either Init so
+    // fields that the legacy peer would silently ignore never reach it.
+    guest_interface.bootstrap_info().await?;
+    if let Some(minimum) = minimum {
+        guest_interface.require_min_version(minimum).await?;
     }
-    // An older guest's Container.Init doesn't understand
-    // readonly_paths/mount.options at all and would silently keep its own
-    // hardened defaults, so privileged mode needs a version gate the same way
-    // capability overrides do. (No masked_paths here: it never varies with
-    // `privileged` — see advanced_options.rs — so it carries no version
-    // requirement of its own.)
-    if bootstrap.container.advanced.linux.readonly_paths.is_empty() {
-        guest_interface
-            .require_min_version(MIN_PRIVILEGED_CONTAINER_GUEST_VERSION)
-            .await?;
-    }
-    if !bootstrap.container.devices.is_empty() {
-        guest_interface
-            .require_min_version(MIN_DEVICE_GUEST_VERSION)
-            .await?;
-    }
-    if requires_safe_volume_sub_path(&bootstrap.container.mounts) {
+    if needs_safe_subpaths {
         guest_interface.require_safe_volume_sub_path().await?;
     }
-    guest_interface.init(bootstrap.guest).await?;
-    tracing::info!("Guest initialized successfully");
+    if let Some(started) = started {
+        return Ok(started);
+    }
 
-    // Step 2: create the container (rootfs + image config + user mounts). This
-    // does NOT run init — Container.Init only creates.
-    tracing::info!("Sending container configuration to guest");
-    let mut container_interface = guest_session.container().await?;
-    let returned_id = container_interface.init(bootstrap.container).await?;
-    tracing::info!(container_id = %returned_id, "Container created");
-
-    // Running init is deliberately *not* done here. The container is created and
-    // left standing at the gate; the host runs it with `Container.Start` after a
-    // client has attached, so nothing it prints can be missed however fast it is.
-
-    Ok(())
+    guest_interface.init(guest_init).await?;
+    guest_session
+        .container()
+        .await?
+        .init(container_init)
+        .await?;
+    Ok(false)
 }
 
 /// The box limits the container reads in its cgroup, from the values the VM
@@ -310,6 +322,14 @@ mod tests {
 
     #[tonic::async_trait]
     impl boxlite_shared::Guest for VersionedGuest {
+        async fn bootstrap(
+            &self,
+            _: tonic::Request<GuestBootstrapRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::GuestBootstrapResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("legacy guest"))
+        }
+
         async fn init(
             &self,
             _: tonic::Request<boxlite_shared::GuestInitRequest>,
@@ -477,8 +497,10 @@ mod tests {
         let result = run_guest_init(
             crate::portal::GuestSession::new(boxlite_shared::BoxTransport::tcp(addr.port())),
             bootstrap_for_version_gate(),
+            false,
         )
-        .await;
+        .await
+        .map(|_| ());
         let guest_calls = *guest_init_calls.lock().unwrap();
         let container_calls = *container_init_calls.lock().unwrap();
         (result, guest_calls, container_calls)

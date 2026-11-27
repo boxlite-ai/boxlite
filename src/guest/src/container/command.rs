@@ -403,7 +403,7 @@ impl ContainerCommand {
         );
 
         let build_start = std::time::Instant::now();
-        tracing::info!(
+        tracing::debug!(
             container_id = %self.id,
             program = %program,
             "exec: build starting"
@@ -452,7 +452,7 @@ impl ContainerCommand {
             e
         })?;
 
-        tracing::info!(
+        tracing::debug!(
             container_id = %self.id,
             pid = pid.as_raw(),
             elapsed_ms = build_start.elapsed().as_millis() as u64,

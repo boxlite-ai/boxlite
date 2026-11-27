@@ -23,9 +23,6 @@ pub(crate) fn prepare() -> BoxliteResult<()> {
         setrlimit(resource, soft, hard)
             .map_err(|e| BoxliteError::Internal(format!("set guest {resource:?}: {e}")))?;
     }
-    eprintln!(
-        "[guest] T+{}ms: init bootstrap completed",
-        crate::boot_elapsed_ms()
-    );
+    crate::boot_timing_log("init bootstrap completed");
     Ok(())
 }

@@ -46,6 +46,8 @@ pub(crate) use crate::litebox::box_impl::LiveState;
 pub(crate) struct BuiltBox {
     pub(crate) live: LiveState,
     pub(crate) guard: types::CleanupGuard,
+    /// Whether Bootstrap also ran the container's init.
+    pub(crate) container_started: bool,
     /// Present when this build made a new disk from a registry image; see
     /// [`crate::litebox::state::BoxState::resolved_image`].
     pub(crate) resolved_image: Option<crate::images::ResolvedImage>,
@@ -61,6 +63,7 @@ use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::BoxState;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 
 pub(crate) use tasks::PortPublishTask;
@@ -79,7 +82,10 @@ use types::InitPipelineContext;
 /// Returns Err for states that aren't valid init entry points
 /// (e.g. Unknown from a corrupted DB row, or future variants). Callers
 /// should treat this as a user-facing precondition error.
-fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>> {
+fn get_execution_plan(
+    status: BoxStatus,
+    guest_init: GuestInitTask,
+) -> BoxliteResult<ExecutionPlan<InitCtx>> {
     let stages: Vec<Stage<BoxedTask<InitCtx>>> = match status {
         BoxStatus::Configured => vec![
             // First start: Full pipeline
@@ -95,7 +101,7 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             // Phase 3: Build config and spawn VM
             Stage::sequential(vec![Box::new(VmmSpawnTask)]),
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
-            Stage::parallel(vec![Box::new(GuestInitTask), Box::new(PortPublishTask)]),
+            Stage::parallel(vec![Box::new(guest_init), Box::new(PortPublishTask)]),
         ],
         // Stopped and Failed both run the restart pipeline. A Failed box
         // has its rootfs preserved (per BoxStatus::Failed doc) and is
@@ -112,7 +118,7 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             Stage::sequential(vec![Box::new(VmmSpawnTask)]),
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
             // GuestInit must run - new VM process has fresh guest daemon
-            Stage::parallel(vec![Box::new(GuestInitTask), Box::new(PortPublishTask)]),
+            Stage::parallel(vec![Box::new(guest_init), Box::new(PortPublishTask)]),
         ],
         BoxStatus::Running => vec![
             // Reattach: vmm_attach gates on ProcessIdentity AND surfaces
@@ -165,7 +171,7 @@ fn box_metrics_from_pipeline(pipeline_metrics: &PipelineMetrics) -> BoxMetricsSt
 ///
 /// ```ignore
 /// let inner = BoxBuilder::new(runtime, config, &state)
-///     .build()
+///     .build(false)
 ///     .await?;
 /// ```
 pub(crate) struct BoxBuilder {
@@ -217,7 +223,7 @@ impl BoxBuilder {
     /// Failed starts clean up automatically. Reattaching to a Running box leaves
     /// its VM and persisted state intact if reconnecting fails. The caller must
     /// disarm the returned guard after a successful start and DB persist.
-    pub(crate) async fn build(self) -> BoxliteResult<BuiltBox> {
+    pub(crate) async fn build(self, auto_start: bool) -> BoxliteResult<BuiltBox> {
         use std::time::Instant;
 
         // Reattach must remain available to stop a legacy shim. Only a new VM
@@ -257,7 +263,14 @@ impl BoxBuilder {
         // New and restarted VMs stay guarded through the caller's DB persist.
         // Capture initialization errors so cleanup preserves their cause.
         let inner = async move {
-            let plan = get_execution_plan(status)?;
+            let started = Arc::new(AtomicBool::new(false));
+            let plan = get_execution_plan(
+                status,
+                GuestInitTask {
+                    auto_start,
+                    started: Arc::clone(&started),
+                },
+            )?;
             let pipeline = PipelineBuilder::from_plan(plan);
             let pipeline_metrics = PipelineExecutor::execute(pipeline, Arc::clone(&ctx)).await?;
 
@@ -334,6 +347,7 @@ impl BoxBuilder {
             Ok::<BuiltBox, BoxliteError>(BuiltBox {
                 live: live_state,
                 guard,
+                container_started: started.load(Ordering::Relaxed),
                 resolved_image: ctx.resolved_image.take(),
             })
         };
@@ -412,7 +426,7 @@ mod plan_tests {
                 if suffix.contains("X-Key") {
                     continue;
                 }
-                let result = builder.build().await;
+                let result = builder.build(false).await;
                 assert!(
                     result.is_err(),
                     "activation accepted missing headers for {status:?}"
@@ -435,21 +449,27 @@ mod plan_tests {
     }
 
     fn plan_shape(status: BoxStatus) -> Vec<(ExecutionMode, Vec<String>)> {
-        get_execution_plan(status)
-            .unwrap()
-            .stages()
-            .into_iter()
-            .map(|stage| {
-                (
-                    stage.execution,
-                    stage
-                        .tasks
-                        .into_iter()
-                        .map(|task| task.name().to_string())
-                        .collect(),
-                )
-            })
-            .collect()
+        get_execution_plan(
+            status,
+            GuestInitTask {
+                auto_start: false,
+                started: Arc::default(),
+            },
+        )
+        .unwrap()
+        .stages()
+        .into_iter()
+        .map(|stage| {
+            (
+                stage.execution,
+                stage
+                    .tasks
+                    .into_iter()
+                    .map(|task| task.name().to_string())
+                    .collect(),
+            )
+        })
+        .collect()
     }
 
     fn boot_pipeline_shape() -> Vec<(ExecutionMode, Vec<String>)> {

@@ -35,7 +35,7 @@ pub(crate) fn validate_container_inputs(
     }
 
     if workdir.as_os_str().is_empty() {
-        tracing::info!("Container working directory is empty, defaulting to '/'");
+        tracing::debug!("Container working directory is empty, defaulting to '/'");
     }
 
     Ok(())
@@ -161,7 +161,7 @@ pub(crate) fn create_oci_bundle(
     )?;
     let config_path = bundle_path.join("config.json");
 
-    spec.save(&config_path).map_err(|e| {
+    std::fs::write(&config_path, serde_json::to_vec(&spec)?).map_err(|e| {
         BoxliteError::Internal(format!(
             "Failed to save OCI spec to {}: {}",
             config_path.display(),
@@ -169,7 +169,7 @@ pub(crate) fn create_oci_bundle(
         ))
     })?;
 
-    tracing::info!(
+    tracing::debug!(
         container_id,
         bundle_path = %bundle_path.display(),
         user_mounts_count = user_mounts.len(),
@@ -223,7 +223,7 @@ pub(crate) fn create_container_with_stdio(
     state_root: &Path,
     bundle_path: &Path,
     io: InitIoSetup,
-) -> BoxliteResult<()> {
+) -> BoxliteResult<nix::unistd::Pid> {
     let (console_socket, init_fds) = match io {
         InitIoSetup::Pipes(fds) => (None, Some(fds)),
         InitIoSetup::Console(socket_path) => (Some(socket_path), None),
@@ -263,12 +263,12 @@ pub(crate) fn create_container_with_stdio(
         })?;
     drop(init_fds);
 
-    tracing::info!(
+    tracing::debug!(
         container_id,
         init_pid = init_pid.as_raw(),
         "Created OCI container with custom stdio via zygote"
     );
-    Ok(())
+    Ok(init_pid)
 }
 
 /// Start the container (executes entrypoint)
@@ -284,11 +284,17 @@ pub(crate) fn start_container(container_id: &str, state_root: &Path) -> BoxliteR
         ))
     })?;
 
+    // load() already refreshed the live status; reuse this state instead of
+    // probing via Container::is_running() and rereading state.json.
+    if container.status() == libcontainer::container::ContainerStatus::Running {
+        return Ok(());
+    }
+
     container.start().map_err(|e| {
         BoxliteError::Internal(format!("Failed to start container {}: {}", container_id, e))
     })?;
 
-    tracing::info!(container_id, "Started OCI container");
+    tracing::debug!(container_id, "Started OCI container");
     Ok(())
 }
 

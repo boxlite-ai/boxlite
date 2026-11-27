@@ -1,296 +1,188 @@
-//! Network interface configuration for guest using rtnetlink
-//!
-//! Configures the guest's network interface to enable communication with the host.
-//! The container inherits the guest's network namespace, so this configuration
-//! must happen before the container starts.
-//!
-//! Uses rtnetlink (pure Rust netlink library) - no dependency on `ip` command.
+//! Configure the guest network namespace before containers inherit it.
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use futures::stream::TryStreamExt;
+use nix::libc;
+use std::ffi::{OsStr, OsString};
+use std::io;
 use std::net::Ipv4Addr;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+
+// Match the virtual network's standard Ethernet MTU. Guest.Init has no MTU field.
+const ETHERNET_MTU: libc::c_int = 1500;
 
 /// Localhost is required even when Guest.Init has no external network config.
-pub(crate) async fn configure_loopback() -> BoxliteResult<()> {
-    let (connection, handle, _) = rtnetlink::new_connection()
-        .map_err(|e| BoxliteError::Internal(format!("create loopback netlink connection: {e}")))?;
-    tokio::spawn(connection);
-    bring_up_loopback(&handle).await
+pub(crate) fn configure_loopback() -> BoxliteResult<()> {
+    let fd = ipv4_socket()?;
+    bring_up_interface(&fd, &mut interface_request(OsStr::new("lo"))?)
 }
 
-async fn bring_up_loopback(handle: &rtnetlink::Handle) -> BoxliteResult<()> {
-    let link = handle
-        .link()
-        .get()
-        .match_name("lo".to_string())
-        .execute()
-        .try_next()
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("get lo interface: {e}")))?
-        .ok_or_else(|| BoxliteError::Internal("lo interface not found".to_string()))?;
-    handle
-        .link()
-        .set(link.header.index)
-        .up()
-        .execute()
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("bring up lo: {e}")))
-}
-
-/// Configure guest network interface
-///
-/// Sets up eth0 with static IP 192.168.127.2/24 to match the network backend's DHCP configuration.
-/// This enables:
-/// - Outbound connectivity from container → host
-/// - Inbound port forwarding: host → network backend → eth0 → container
-///
-/// # Network Architecture
-/// ```text
-/// Host                 Network Backend      Guest (eth0)        Container
-/// localhost:3001  →   192.168.127.2:3001   →  0.0.0.0:3001
-/// ```
-///
-/// # Implementation
-/// Uses rtnetlink (pure Rust) for network configuration via Linux netlink.
-/// No dependency on `ip` command binary.
-#[allow(dead_code)] // Will be used when network configuration is enabled
-pub async fn configure_network() -> BoxliteResult<()> {
-    use rtnetlink::new_connection;
-
-    tracing::info!("🌐 Configuring network interface eth0 (using rtnetlink)");
-
-    // Create netlink connection
-    let (connection, handle, _) = new_connection().map_err(|e| {
-        BoxliteError::Internal(format!("Failed to create netlink connection: {}", e))
-    })?;
-
-    // Spawn the netlink connection in the background
-    tokio::spawn(connection);
-
-    bring_up_loopback(&handle).await?;
-
-    // 2. Find eth0 interface
-    tracing::info!("  🔍 Finding eth0 interface");
-    let mut links = handle.link().get().match_name("eth0".to_string()).execute();
-
-    let link = links
-        .try_next()
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("Failed to get eth0 interface: {}", e)))?
-        .ok_or_else(|| BoxliteError::Internal("eth0 interface not found".to_string()))?;
-
-    let eth0_index = link.header.index;
-    tracing::debug!("  ✓ Found eth0 with index {}", eth0_index);
-
-    // 3. Bring up eth0
-    tracing::info!("  ↑ Bringing up eth0");
-    handle
-        .link()
-        .set(eth0_index)
-        .up()
-        .execute()
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("Failed to bring up eth0: {}", e)))?;
-
-    // 4. Assign IP address: 192.168.127.2/24
-    tracing::info!("  📍 Assigning IP: 192.168.127.2/24");
-    let ip_addr = Ipv4Addr::new(192, 168, 127, 2);
-
-    handle
-        .address()
-        .add(eth0_index, ip_addr.into(), 24) // /24 prefix
-        .execute()
-        .await
-        .or_else(|e| {
-            // Ignore "File exists" error (address already assigned)
-            if e.to_string().contains("File exists") {
-                tracing::debug!("IP address already assigned (this is OK)");
-                Ok(())
-            } else {
-                Err(e)
-            }
-        })
-        .map_err(|e| BoxliteError::Internal(format!("Failed to assign IP address to eth0: {}", e)))?;
-
-    // 5. Add default route via 192.168.127.1
-    tracing::info!("  🚪 Setting default gateway: 192.168.127.1");
-    let gateway = Ipv4Addr::new(192, 168, 127, 1);
-
-    handle
-        .route()
-        .add()
-        .v4()
-        .gateway(gateway)
-        .execute()
-        .await
-        .or_else(|e| {
-            // Ignore "File exists" error (route already exists)
-            if e.to_string().contains("File exists") {
-                tracing::debug!("Default route already exists (this is OK)");
-                Ok(())
-            } else {
-                Err(e)
-            }
-        })
-        .map_err(|e| BoxliteError::Internal(format!("Failed to set default gateway: {}", e)))?;
-
-    tracing::info!("✅ Network configured: eth0 is UP at 192.168.127.2/24");
-
-    // 6. Verify configuration (optional, for debugging)
-    if tracing::enabled!(tracing::Level::DEBUG) {
-        tracing::debug!("Verifying eth0 configuration:");
-
-        // List addresses on eth0
-        let mut addrs = handle
-            .address()
-            .get()
-            .set_link_index_filter(eth0_index)
-            .execute();
-
-        while let Some(addr) = addrs
-            .try_next()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("Failed to get addresses: {}", e)))?
-        {
-            tracing::debug!("  Address: {:?}", addr);
-        }
-    }
-
-    Ok(())
-}
-
-/// Configure network interface with explicit parameters.
-///
-/// This is the primary API used by Guest.Init handler.
-///
-/// # Arguments
-/// * `interface` - Network interface name (e.g., "eth0")
-/// * `ip` - Optional IP address with prefix (e.g., "192.168.127.2/24"). If None, skips IP assignment.
-/// * `gateway` - Optional gateway address (e.g., "192.168.127.1"). If None, skips route setup.
+/// Configure the selected interface, or the first non-loopback interface if
+/// `interface` is empty. The address and default gateway are optional.
+/// Kept async for the Guest.Init caller; the ioctls complete synchronously.
 pub async fn configure_network_from_config(
     interface: &str,
     ip: Option<&str>,
     gateway: Option<&str>,
 ) -> BoxliteResult<()> {
-    use rtnetlink::new_connection;
-
-    tracing::info!(
-        "🌐 Configuring network interface {} (using rtnetlink)",
-        interface
-    );
-
-    // Create netlink connection
-    let (connection, handle, _) = new_connection().map_err(|e| {
-        BoxliteError::Internal(format!("Failed to create netlink connection: {}", e))
-    })?;
-
-    // Spawn the netlink connection in the background
-    tokio::spawn(connection);
-
-    bring_up_loopback(&handle).await?;
-
-    // 2. Find interface
-    tracing::info!("  🔍 Finding {} interface", interface);
-    let mut links = handle
-        .link()
-        .get()
-        .match_name(interface.to_string())
-        .execute();
-
-    let link = links
-        .try_next()
-        .await
-        .map_err(|e| {
-            BoxliteError::Internal(format!("Failed to get {} interface: {}", interface, e))
-        })?
-        .ok_or_else(|| BoxliteError::Internal(format!("{} interface not found", interface)))?;
-
-    let if_index = link.header.index;
-    tracing::debug!("  ✓ Found {} with index {}", interface, if_index);
-
-    // 3. Bring up interface
-    tracing::info!("  ↑ Bringing up {}", interface);
-    handle
-        .link()
-        .set(if_index)
-        .up()
-        .execute()
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("Failed to bring up {}: {}", interface, e)))?;
-
-    // 4. Assign IP address (if provided)
-    if let Some(ip_str) = ip {
-        // Parse IP/prefix (e.g., "192.168.127.2/24")
-        let (ip_addr, prefix) = parse_ip_prefix(ip_str)?;
-
-        tracing::info!("  📍 Assigning IP: {}/{}", ip_addr, prefix);
-
-        handle
-            .address()
-            .add(if_index, ip_addr.into(), prefix)
-            .execute()
-            .await
-            .or_else(|e| {
-                if e.to_string().contains("File exists") {
-                    tracing::debug!("IP address already assigned (this is OK)");
-                    Ok(())
-                } else {
-                    Err(e)
-                }
+    let detected;
+    let interface = if interface.is_empty() {
+        detected = detect_interface()?;
+        detected.as_os_str()
+    } else {
+        OsStr::new(interface)
+    };
+    let mut req = interface_request(interface)?;
+    let ip = ip.map(parse_ip_prefix).transpose()?;
+    let gateway: Option<Ipv4Addr> = gateway
+        .map(|value| {
+            value.parse().map_err(|e| {
+                BoxliteError::Internal(format!("Invalid gateway address '{value}': {e}"))
             })
-            .map_err(|e| {
-                BoxliteError::Internal(format!(
-                    "Failed to assign IP address to {}: {}",
-                    interface, e
-                ))
-            })?;
+        })
+        .transpose()?;
+
+    tracing::debug!(?interface, ?ip, ?gateway, "Configuring guest network");
+    let fd = ipv4_socket()?;
+    req.ifr_ifru.ifru_mtu = ETHERNET_MTU;
+    interface_ioctl(&fd, libc::SIOCSIFMTU as _, &mut req, "set interface MTU")?;
+    bring_up_interface(&fd, &mut req)?;
+
+    if let Some((address, prefix)) = ip {
+        // Prefix 0 has an all-zero mask; avoid shifting a u32 by 32 bits.
+        let mask = u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0);
+        req.ifr_ifru.ifru_addr = ipv4_sockaddr(address);
+        interface_ioctl(&fd, libc::SIOCSIFADDR as _, &mut req, "set IPv4 address")?;
+        req.ifr_ifru.ifru_netmask = ipv4_sockaddr(Ipv4Addr::from(mask));
+        interface_ioctl(&fd, libc::SIOCSIFNETMASK as _, &mut req, "set IPv4 netmask")?;
     }
-
-    // 5. Add default route (if gateway provided)
-    if let Some(gw_str) = gateway {
-        let gw_addr: Ipv4Addr = gw_str.parse().map_err(|e| {
-            BoxliteError::Internal(format!("Invalid gateway address '{}': {}", gw_str, e))
-        })?;
-
-        tracing::info!("  🚪 Setting default gateway: {}", gw_addr);
-
-        handle
-            .route()
-            .add()
-            .v4()
-            .gateway(gw_addr)
-            .execute()
-            .await
-            .or_else(|e| {
-                if e.to_string().contains("File exists") {
-                    tracing::debug!("Default route already exists (this is OK)");
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            })
-            .map_err(|e| BoxliteError::Internal(format!("Failed to set default gateway: {}", e)))?;
+    if let Some(gateway) = gateway {
+        add_default_route(&fd, &mut req, gateway)?;
     }
-
-    tracing::info!("✅ Network configured: {} is UP", interface);
     Ok(())
 }
 
-/// Parse IP address with optional prefix (e.g., "192.168.127.2/24" or "192.168.127.2")
-fn parse_ip_prefix(ip_str: &str) -> BoxliteResult<(Ipv4Addr, u8)> {
-    if let Some((ip_part, prefix_part)) = ip_str.split_once('/') {
-        let ip_addr: Ipv4Addr = ip_part.parse().map_err(|e| {
-            BoxliteError::Internal(format!("Invalid IP address '{}': {}", ip_part, e))
-        })?;
-        let prefix: u8 = prefix_part.parse().map_err(|e| {
-            BoxliteError::Internal(format!("Invalid prefix '{}': {}", prefix_part, e))
-        })?;
-        Ok((ip_addr, prefix))
-    } else {
-        // Default to /24 if no prefix specified
-        let ip_addr: Ipv4Addr = ip_str.parse().map_err(|e| {
-            BoxliteError::Internal(format!("Invalid IP address '{}': {}", ip_str, e))
-        })?;
-        Ok((ip_addr, 24))
+fn detect_interface() -> BoxliteResult<OsString> {
+    for entry in std::fs::read_dir("/sys/class/net")? {
+        let name = entry?.file_name();
+        if name != "lo" {
+            return Ok(name);
+        }
     }
+    Err(BoxliteError::Internal(
+        "No non-loopback interface found".into(),
+    ))
+}
+
+fn ipv4_socket() -> BoxliteResult<OwnedFd> {
+    // SAFETY: socket takes no pointers. A successful call returns a fresh fd.
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+    if fd < 0 {
+        return Err(BoxliteError::Internal(format!(
+            "open IPv4 control socket: {}",
+            io::Error::last_os_error()
+        )));
+    }
+    // SAFETY: socket succeeded and ownership is transferred once.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn interface_request(name: &OsStr) -> BoxliteResult<libc::ifreq> {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() || bytes.len() >= libc::IFNAMSIZ || bytes.contains(&0) {
+        return Err(BoxliteError::InvalidArgument(format!(
+            "Invalid network interface: {name:?}"
+        )));
+    }
+    // SAFETY: zero is valid for the name and all fields of the ifreq union.
+    let mut req: libc::ifreq = unsafe { std::mem::zeroed() };
+    for (dst, &src) in req.ifr_name.iter_mut().zip(bytes) {
+        *dst = src as libc::c_char;
+    }
+    Ok(req)
+}
+
+fn interface_ioctl(
+    fd: &OwnedFd,
+    op: libc::Ioctl,
+    req: &mut libc::ifreq,
+    action: &str,
+) -> BoxliteResult<()> {
+    // SAFETY: all callers use Linux ioctls that read or write an ifreq.
+    if unsafe { libc::ioctl(fd.as_raw_fd(), op, std::ptr::from_mut(req)) } < 0 {
+        return Err(BoxliteError::Internal(format!(
+            "{action}: {}",
+            io::Error::last_os_error()
+        )));
+    }
+    Ok(())
+}
+
+fn bring_up_interface(fd: &OwnedFd, req: &mut libc::ifreq) -> BoxliteResult<()> {
+    interface_ioctl(fd, libc::SIOCGIFFLAGS as _, req, "get interface flags")?;
+    // SAFETY: SIOCGIFFLAGS initialized the flags member.
+    let flags = unsafe { req.ifr_ifru.ifru_flags };
+    let up = libc::IFF_UP as libc::c_short;
+    if flags & up == 0 {
+        req.ifr_ifru.ifru_flags = flags | up;
+        interface_ioctl(fd, libc::SIOCSIFFLAGS as _, req, "bring up interface")?;
+    }
+    Ok(())
+}
+
+fn ipv4_sockaddr(ip: Ipv4Addr) -> libc::sockaddr {
+    let addr = libc::sockaddr_in {
+        sin_family: libc::AF_INET as libc::sa_family_t,
+        sin_port: 0,
+        sin_addr: libc::in_addr {
+            s_addr: u32::from_ne_bytes(ip.octets()),
+        },
+        sin_zero: [0; 8],
+    };
+    // SAFETY: both Linux structures are 16 bytes with the same family field;
+    // the remaining bytes are copied verbatim into sockaddr.sa_data.
+    unsafe { std::mem::transmute::<libc::sockaddr_in, libc::sockaddr>(addr) }
+}
+
+fn add_default_route(fd: &OwnedFd, req: &mut libc::ifreq, gateway: Ipv4Addr) -> BoxliteResult<()> {
+    // SAFETY: rtentry consists of integers, sockaddrs and a nullable pointer.
+    let mut route: libc::rtentry = unsafe { std::mem::zeroed() };
+    route.rt_dst = ipv4_sockaddr(Ipv4Addr::UNSPECIFIED);
+    route.rt_genmask = ipv4_sockaddr(Ipv4Addr::UNSPECIFIED);
+    route.rt_gateway = ipv4_sockaddr(gateway);
+    route.rt_flags = (libc::RTF_UP | libc::RTF_GATEWAY) as libc::c_ushort;
+    route.rt_dev = req.ifr_name.as_mut_ptr();
+    // SAFETY: SIOCADDRT reads an rtentry and the NUL-terminated interface name,
+    // both of which are live until ioctl returns.
+    if unsafe {
+        libc::ioctl(
+            fd.as_raw_fd(),
+            libc::SIOCADDRT as _,
+            &mut route as *mut libc::rtentry,
+        )
+    } < 0
+    {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EEXIST) {
+            return Err(BoxliteError::Internal(format!(
+                "set default gateway {gateway}: {error}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn parse_ip_prefix(value: &str) -> BoxliteResult<(Ipv4Addr, u8)> {
+    let (address, prefix) = value.split_once('/').unwrap_or((value, "24"));
+    let address = address
+        .parse()
+        .map_err(|e| BoxliteError::Internal(format!("Invalid IPv4 address '{address}': {e}")))?;
+    let prefix = prefix
+        .parse::<u8>()
+        .ok()
+        .filter(|&p| p <= 32)
+        .ok_or_else(|| {
+            BoxliteError::Internal(format!("Invalid IPv4 prefix '{prefix}': expected 0–32"))
+        })?;
+    Ok((address, prefix))
 }

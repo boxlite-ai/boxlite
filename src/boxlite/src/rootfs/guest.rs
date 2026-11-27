@@ -1,6 +1,7 @@
 //! Guest rootfs types and metadata.
 
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -13,7 +14,8 @@ use crate::images::{ImageDiskManager, ImageObject};
 #[cfg(test)]
 use crate::runtime::id::BaseDiskID;
 use crate::runtime::id::BaseDiskIDMint;
-use crate::vmm::guest_artifacts::GuestArtifacts;
+use crate::util::find_binary;
+use crate::vmm::guest_artifacts::{GuestArtifacts, HOST_GUEST_MKE2FS, HOST_GUEST_RESIZE2FS};
 use crate::vmm::guest_binary::GuestBinary;
 
 /// A fully resolved and ready-to-use guest rootfs.
@@ -329,31 +331,39 @@ impl GuestRootfsManager {
     /// Get or create the minimal guest rootfs from the standalone artifacts.
     ///
     /// The minimal rootfs is just `boxlite-guest` plus the static
-    /// `mke2fs`/`resize2fs`; it is built straight into an ext4 (no OCI image,
-    /// nothing injected afterward) and cached content-addressed in `bases/`
-    /// under the combined artifact hash, tracked and GC'd like the Debian rootfs.
-    pub async fn get_or_create_minimal(
-        &self,
-        artifacts: &GuestArtifacts,
-    ) -> BoxliteResult<GuestRootfs> {
-        let key = Self::minimal_version_key(artifacts);
+    /// `mke2fs`/`resize2fs`. Check their metadata before opening the binaries;
+    /// only a miss needs to validate and copy the artifacts into a new ext4.
+    /// This is called on a blocking thread under the runtime's async OnceCell.
+    pub fn get_or_create_minimal(&self) -> BoxliteResult<GuestRootfs> {
+        self.get_or_create_minimal_at(&Self::minimal_artifact_paths()?)
+    }
 
+    fn get_or_create_minimal_at(&self, paths: &[PathBuf; 3]) -> BoxliteResult<GuestRootfs> {
+        let key = Self::minimal_version_key(paths)?;
         if let Some(disk) = self.find(&key) {
             tracing::debug!(version_key = %key, "get_or_create_minimal: cache hit");
             return Self::disk_to_guest_rootfs(disk, Vec::new());
         }
 
         tracing::info!(version_key = %key, "get_or_create_minimal: cache miss — building");
-        let disk = self.build_minimal_and_install(artifacts, &key).await?;
+        let [guest, mke2fs, resize2fs] = paths;
+        let guest = GuestBinary::resolve_at(guest.clone())?;
+        let artifacts = GuestArtifacts::resolve_at(&guest, mke2fs.clone(), resize2fs.clone())?;
+        tracing::debug!(
+            artifact_id = artifacts.id(),
+            "Validated minimal rootfs artifacts"
+        );
+        let disk = self.build_minimal_and_install(&artifacts, paths, &key)?;
         Self::disk_to_guest_rootfs(disk, Vec::new())
     }
 
     /// Stage the artifacts into a tree, build an ext4, and install it through
     /// the shared cache (`install`), so the minimal rootfs is tracked and GC'd
     /// like the Debian rootfs.
-    async fn build_minimal_and_install(
+    fn build_minimal_and_install(
         &self,
         artifacts: &GuestArtifacts,
+        paths: &[PathBuf; 3],
         key: &str,
     ) -> BoxliteResult<Disk> {
         let temp = tempfile::tempdir_in(&self.temp_dir).map_err(|e| {
@@ -366,17 +376,14 @@ impl GuestRootfsManager {
 
         let tree_root = temp.path().join("rootfs");
         stage_tree(&tree_root, artifacts)?;
+        // Don't publish a disk under a key for files replaced during staging.
+        if Self::minimal_version_key(paths)? != key {
+            return Err(BoxliteError::Storage(
+                "Guest artifacts changed while staging the minimal rootfs; retry startup".into(),
+            ));
+        }
         let staged_path = temp.path().join("minimal-rootfs.ext4");
-
-        // mke2fs runs as a subprocess plus disk I/O; keep it off the async path.
-        let tree_for_build = tree_root.clone();
-        let staged_for_build = staged_path.clone();
-        let disk = tokio::task::spawn_blocking(move || {
-            create_ext4_from_dir(&tree_for_build, &staged_for_build, 0)
-        })
-        .await
-        .map_err(|e| BoxliteError::Storage(format!("minimal rootfs build task failed: {e}")))??;
-
+        let disk = create_ext4_from_dir(&tree_root, &staged_path, 0)?;
         self.install(key, disk)
     }
 
@@ -556,7 +563,7 @@ impl GuestRootfsManager {
 
     /// Garbage-collect stale guest rootfs entries.
     ///
-    /// Keeps the current minimal rootfs (keyed by the combined artifact id) and
+    /// Keeps the current minimal rootfs (keyed by artifact metadata) and
     /// any base an existing box overlay still backs onto. Deletes everything else
     /// — including OCI Debian rootfs bases, which the boot path no longer produces.
     ///
@@ -567,7 +574,7 @@ impl GuestRootfsManager {
         // Propagate resolution failure: a transient error must not turn the
         // current key into `None`, which would make gc_inner delete every cached
         // rootfs as non-current.
-        let current_minimal_key = GuestArtifacts::get()?.id().to_string();
+        let current_minimal_key = Self::minimal_version_key(&Self::minimal_artifact_paths()?)?;
 
         let result = self.gc_inner(boxes_dir, Some(&current_minimal_key));
 
@@ -671,9 +678,41 @@ impl GuestRootfsManager {
         format!("{}-{}", d, g)
     }
 
-    /// Version key for the minimal rootfs: the combined artifact content id.
-    fn minimal_version_key(artifacts: &GuestArtifacts) -> String {
-        artifacts.id().to_string()
+    fn minimal_artifact_paths() -> BoxliteResult<[PathBuf; 3]> {
+        Ok([
+            find_binary("boxlite-guest")?,
+            find_binary(HOST_GUEST_MKE2FS)?,
+            find_binary(HOST_GUEST_RESIZE2FS)?,
+        ])
+    }
+
+    /// Size and nanosecond timestamps catch in-place writes (even when mtime
+    /// is restored); device/inode also catch atomic replacement. Version the
+    /// key separately from the legacy content hashes in the same table.
+    fn minimal_version_key(paths: &[PathBuf; 3]) -> BoxliteResult<String> {
+        use sha2::{Digest, Sha256};
+
+        let mut hash = Sha256::new();
+        for path in paths {
+            let metadata = fs::metadata(path).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Cannot stat guest artifact {}: {e}",
+                    path.display()
+                ))
+            })?;
+            for field in [metadata.dev(), metadata.ino(), metadata.len()] {
+                hash.update(field.to_le_bytes());
+            }
+            for field in [
+                metadata.mtime(),
+                metadata.mtime_nsec(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            ] {
+                hash.update(field.to_le_bytes());
+            }
+        }
+        Ok(format!("minimal-meta-v1-{}", hex::encode(hash.finalize())))
     }
 }
 
@@ -1199,8 +1238,8 @@ mod tests {
 
     /// The full build must land the artifacts inside a real ext4 image, tracked
     /// in the bases/ cache. Skipped without the host e2fsprogs binaries.
-    #[tokio::test]
-    async fn get_or_create_minimal_builds_ext4_with_artifacts() {
+    #[test]
+    fn get_or_create_minimal_builds_ext4_with_artifacts() {
         use crate::util::find_binary;
 
         if find_binary("mke2fs").is_err() || find_binary("debugfs").is_err() {
@@ -1210,11 +1249,17 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let artifacts = fake_artifacts(&dir);
+        let paths = [
+            artifacts.guest_path(),
+            artifacts.mke2fs().path(),
+            artifacts.resize2fs().path(),
+        ]
+        .map(Path::to_path_buf);
         let temp_dir = dir.path().join("tmp");
         std::fs::create_dir_all(&temp_dir).unwrap();
         let mgr = make_mgr(dir.path().join("bases"), temp_dir);
 
-        let rootfs = mgr.get_or_create_minimal(&artifacts).await.unwrap();
+        let rootfs = mgr.get_or_create_minimal_at(&paths).unwrap();
         let Strategy::Disk { disk_path, .. } = rootfs.strategy else {
             panic!("minimal rootfs must be disk-based");
         };
@@ -1240,7 +1285,7 @@ mod tests {
         }
 
         // Second call is a cache hit — same path, no rebuild.
-        let rootfs2 = mgr.get_or_create_minimal(&artifacts).await.unwrap();
+        let rootfs2 = mgr.get_or_create_minimal_at(&paths).unwrap();
         let Strategy::Disk {
             disk_path: disk_path2,
             ..

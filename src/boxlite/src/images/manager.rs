@@ -36,6 +36,8 @@ pub(super) struct ImageManifest {
     pub(super) manifest_digest: String,
     pub(super) layers: Vec<LayerInfo>,
     pub(super) config_digest: String,
+    /// Parsed from digest-verified bytes; local bundles intentionally bypass this cache.
+    pub(super) verified_config: Option<Arc<oci_spec::image::ImageConfiguration>>,
     /// DiffIDs from image config's `rootfs.diff_ids` (SHA256 of uncompressed layers).
     /// Empty if not available (e.g., config not yet downloaded, or empty in config).
     pub(super) diff_ids: Vec<String>,

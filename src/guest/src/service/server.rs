@@ -1,13 +1,14 @@
 use crate::container::Container;
 use crate::layout::GuestLayout;
 use crate::service::exec::registry::ExecutionRegistry;
-use boxlite_shared::{BoxTransport, BoxliteResult};
+use boxlite_shared::{BoxTransport, BoxliteError, BoxliteResult};
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 use tonic::transport::Server;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 /// Guest initialization state.
 ///
@@ -32,6 +33,10 @@ pub(crate) struct GuestServer {
 
     /// Guest initialization state (set by Guest.Init)
     pub init_state: Arc<Mutex<GuestInitState>>,
+
+    /// Set by `run` until boot preparation has finished. Direct service tests
+    /// don't run guest boot preparation.
+    boot_ready: Option<watch::Receiver<bool>>,
 
     /// Container registry: container_id -> Container
     pub containers: Arc<Mutex<HashMap<String, Arc<Mutex<Container>>>>>,
@@ -74,6 +79,7 @@ impl GuestServer {
         Self {
             layout,
             init_state: Arc::new(Mutex::new(GuestInitState::default())),
+            boot_ready: None,
             containers: Arc::new(Mutex::new(HashMap::new())),
             registry: ExecutionRegistry::new(),
             ssh_manager: crate::service::ssh::SshManager::default(),
@@ -84,19 +90,45 @@ impl GuestServer {
         }
     }
 
+    /// In-memory exit status for Exec admission. The shared exit file is only
+    /// a durable record for the host, not a guest-side liveness probe.
+    pub(super) async fn init_exit_code(&self, container_id: &str) -> Option<i32> {
+        let exit = self
+            .init_exits
+            .lock()
+            .await
+            .get(container_id)
+            .filter(|slot| slot.has_exited())
+            .cloned()?;
+        // Once populated, the slot never clears, so get() will not wait.
+        Some(exit.get().await.shell_code())
+    }
+
+    /// Wait for the boot work that can run in parallel with host notification.
+    #[allow(clippy::result_large_err)]
+    pub(super) async fn wait_for_boot_prep(&self) -> Result<(), tonic::Status> {
+        if let Some(mut ready) = self.boot_ready.clone() {
+            ready
+                .wait_for(|ready| *ready)
+                .await
+                .map_err(|_| tonic::Status::internal("Guest boot preparation failed"))?;
+        }
+        Ok(())
+    }
+
     /// Run the tonic server listening on the specified transport.
     ///
     /// Binds to the specified transport (Unix, TCP, or Vsock) and serves
     /// all guest gRPC services on a single port.
     ///
     /// If `notify_uri` is provided, connects to that URI after the server
-    /// is ready to serve, signaling readiness to the host.
+    /// binds, signaling readiness to the host while boot preparation finishes.
     pub async fn run(
         mut self,
         listen_uri: String,
         notify_uri: Option<String>,
     ) -> BoxliteResult<()> {
-        info!("Starting tonic gRPC server");
+        debug!("Starting tonic gRPC server");
 
         // Parse the listen URI to determine transport type
         let transport = BoxTransport::from_uri(&listen_uri).map_err(|e| {
@@ -106,10 +138,23 @@ impl GuestServer {
             ))
         })?;
 
-        info!("Parsed transport from URI: {:?}", transport);
+        debug!("Parsed transport from URI: {:?}", transport);
 
         // Only the vsock listener verifies the host CID before serving RPCs.
         self.allow_clock_sync = matches!(&transport, BoxTransport::Vsock { .. });
+
+        // TCP on 127.0.0.1 needs loopback before binding or notifying.
+        let loopback_ready = matches!(&transport, BoxTransport::Tcp { .. })
+            || notify_uri
+                .as_deref()
+                .is_some_and(|uri| uri.starts_with("tcp://"));
+        if loopback_ready {
+            prepare_loopback()?;
+        }
+
+        let (boot_ready_tx, boot_ready_rx) = watch::channel(false);
+        self.boot_ready = Some(boot_ready_rx);
+        let boot_layout = self.layout.clone();
 
         // Wrap self in Arc for sharing across services
         let server = Arc::new(self);
@@ -127,7 +172,7 @@ impl GuestServer {
                 use tokio_stream::StreamExt as _;
                 use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
 
-                info!("Binding to vsock port {}", port);
+                debug!("Binding to vsock port {}", port);
                 let addr = VsockAddr::new(VMADDR_CID_ANY, port);
                 let listener = VsockListener::bind(addr).map_err(|e| {
                     boxlite_shared::errors::BoxliteError::Internal(format!(
@@ -135,12 +180,8 @@ impl GuestServer {
                         e
                     ))
                 })?;
-                info!("Listening on vsock://{}:{}", VMADDR_CID_ANY, port);
-                eprintln!(
-                    "[guest] T+{}ms: server bound (vsock:{})",
-                    crate::boot_elapsed_ms(),
-                    port
-                );
+                debug!("Listening on vsock://{}:{}", VMADDR_CID_ANY, port);
+                crate::boot_timing_log(format_args!("server bound (vsock:{port})"));
 
                 // AF_VSOCK is not a trust boundary by itself: a tenant process
                 // can make a loopback vsock connection from inside the VM. All
@@ -163,21 +204,14 @@ impl GuestServer {
                         Err(error) => Some(Err(error)),
                     });
 
-                tokio::spawn(async move {
-                    if let Err(e) = notify_host_ready(notify_uri).await {
-                        warn!("Failed to notify host: {}", e);
-                    }
-                });
-
-                server_builder
-                    .serve_with_incoming(incoming)
-                    .await
-                    .map_err(|e| {
-                        boxlite_shared::errors::BoxliteError::Internal(format!(
-                            "Server error: {}",
-                            e
-                        ))
-                    })?;
+                serve_after_bind(
+                    server_builder.serve_with_incoming(incoming),
+                    notify_uri,
+                    boot_layout,
+                    loopback_ready,
+                    boot_ready_tx,
+                )
+                .await?;
             }
 
             BoxTransport::Unix { socket_path } => {
@@ -193,68 +227,80 @@ impl GuestServer {
                     std::fs::create_dir_all(parent)?;
                 }
 
-                info!("Binding to Unix socket: {}", socket_path.display());
+                debug!("Binding to Unix socket: {}", socket_path.display());
                 let listener = tokio::net::UnixListener::bind(&socket_path)?;
-                info!("Listening on unix://{}", socket_path.display());
-                eprintln!(
-                    "[guest] T+{}ms: server bound (unix)",
-                    crate::boot_elapsed_ms()
-                );
+                debug!("Listening on unix://{}", socket_path.display());
+                crate::boot_timing_log("server bound (unix)");
 
-                let incoming = UnixListenerStream::new(listener);
-
-                tokio::spawn(async move {
-                    if let Err(e) = notify_host_ready(notify_uri).await {
-                        warn!("Failed to notify host: {}", e);
-                    }
-                });
-
-                server_builder
-                    .serve_with_incoming(incoming)
-                    .await
-                    .map_err(|e| {
-                        boxlite_shared::errors::BoxliteError::Internal(format!(
-                            "Server error: {}",
-                            e
-                        ))
-                    })?;
+                serve_after_bind(
+                    server_builder.serve_with_incoming(UnixListenerStream::new(listener)),
+                    notify_uri,
+                    boot_layout,
+                    loopback_ready,
+                    boot_ready_tx,
+                )
+                .await?;
             }
 
             BoxTransport::Tcp { port } => {
                 use tokio_stream::wrappers::TcpListenerStream;
 
                 let addr = format!("127.0.0.1:{}", port);
-                info!("Binding to TCP address: {}", addr);
+                debug!("Binding to TCP address: {}", addr);
                 let listener = tokio::net::TcpListener::bind(&addr).await?;
-                info!("Listening on tcp://{}", addr);
-                eprintln!(
-                    "[guest] T+{}ms: server bound (tcp:{})",
-                    crate::boot_elapsed_ms(),
-                    port
-                );
+                debug!("Listening on tcp://{}", addr);
+                crate::boot_timing_log(format_args!("server bound (tcp:{port})"));
 
-                let incoming = TcpListenerStream::new(listener);
-
-                tokio::spawn(async move {
-                    if let Err(e) = notify_host_ready(notify_uri).await {
-                        warn!("Failed to notify host: {}", e);
-                    }
-                });
-
-                server_builder
-                    .serve_with_incoming(incoming)
-                    .await
-                    .map_err(|e| {
-                        boxlite_shared::errors::BoxliteError::Internal(format!(
-                            "Server error: {}",
-                            e
-                        ))
-                    })?;
+                serve_after_bind(
+                    server_builder.serve_with_incoming(TcpListenerStream::new(listener)),
+                    notify_uri,
+                    boot_layout,
+                    loopback_ready,
+                    boot_ready_tx,
+                )
+                .await?;
             }
         }
 
         Ok(())
     }
+}
+
+fn prepare_loopback() -> BoxliteResult<()> {
+    crate::network::configure_loopback()?;
+    crate::boot_timing_log("loopback ready");
+    Ok(())
+}
+
+async fn serve_after_bind(
+    serve: impl Future<Output = Result<(), tonic::transport::Error>>,
+    notify_uri: Option<String>,
+    layout: GuestLayout,
+    loopback_ready: bool,
+    boot_ready: watch::Sender<bool>,
+) -> BoxliteResult<()> {
+    if notify_uri.is_some() {
+        tokio::spawn(async move {
+            if let Err(e) = notify_host_ready(notify_uri).await {
+                warn!("Failed to notify host: {e}");
+            }
+        });
+        // Let the notification task initiate its connect before synchronous boot preparation.
+        tokio::task::yield_now().await;
+    }
+
+    crate::sysctl::apply_boot_hardening()?;
+    crate::boot_timing_log("kernel hardening applied");
+    if !loopback_ready {
+        prepare_loopback()?;
+    }
+    debug!("Preparing guest layout at {}", layout.base().display());
+    layout.prepare_base()?;
+    boot_ready.send_replace(true);
+
+    serve
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("Server error: {e}")))
 }
 
 /// Notify host that guest is ready by connecting to the notify URI.
@@ -264,7 +310,7 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
     let uri = match notify_uri {
         Some(uri) => uri,
         None => {
-            info!("No notify URI provided, skipping host notification");
+            debug!("No notify URI provided, skipping host notification");
             return Ok(());
         }
     };
@@ -280,7 +326,7 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
         BoxTransport::Vsock { port } => {
             use tokio_vsock::{VsockAddr, VsockStream, VMADDR_CID_HOST};
 
-            info!("Notifying host via vsock:{}", port);
+            debug!("Notifying host via vsock:{}", port);
             let addr = VsockAddr::new(VMADDR_CID_HOST, port);
             let _stream = VsockStream::connect(addr).await.map_err(|e| {
                 boxlite_shared::errors::BoxliteError::Internal(format!(
@@ -288,16 +334,12 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
                     e
                 ))
             })?;
-            eprintln!(
-                "[guest] T+{}ms: host notified (vsock:{})",
-                crate::boot_elapsed_ms(),
-                port
-            );
-            info!("Host notified successfully");
+            crate::boot_timing_log(format_args!("host notified (vsock:{port})"));
+            debug!("Host notified successfully");
             // Connection itself signals readiness, drop immediately
         }
         BoxTransport::Unix { socket_path } => {
-            info!("Notifying host via unix:{}", socket_path.display());
+            debug!("Notifying host via unix:{}", socket_path.display());
             let _stream = tokio::net::UnixStream::connect(&socket_path)
                 .await
                 .map_err(|e| {
@@ -306,14 +348,11 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
                         e
                     ))
                 })?;
-            eprintln!(
-                "[guest] T+{}ms: host notified (unix)",
-                crate::boot_elapsed_ms()
-            );
-            info!("Host notified successfully");
+            crate::boot_timing_log("host notified (unix)");
+            debug!("Host notified successfully");
         }
         BoxTransport::Tcp { port } => {
-            info!("Notifying host via tcp:127.0.0.1:{}", port);
+            debug!("Notifying host via tcp:127.0.0.1:{}", port);
             let _stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
                 .await
                 .map_err(|e| {
@@ -322,12 +361,8 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
                         e
                     ))
                 })?;
-            eprintln!(
-                "[guest] T+{}ms: host notified (tcp:{})",
-                crate::boot_elapsed_ms(),
-                port
-            );
-            info!("Host notified successfully");
+            crate::boot_timing_log(format_args!("host notified (tcp:{port})"));
+            debug!("Host notified successfully");
         }
     }
 

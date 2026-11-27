@@ -36,19 +36,14 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures = "0.3"
 async-stream = "0.3"
-clap = { version = "4.5", features = ["derive"] }
-rayon = "1.10"
 russh = { version = "0.62.4", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3.0"
-tempfile = "3"
 x509-cert = "0.2.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procfs = "0.18.0"
 tokio-vsock = { version = "0.7", features = ["tonic012"] }
 libcontainer = { version = "0.6", default-features = false, features = ["v2", "libseccomp"] }
 oci-spec = "0.9"
-rtnetlink = "0.14"
 rustix = { version = "1.1", features = ["fs"] }
 futures = "0.3"
 
@@ -56,3 +51,7 @@ futures = "0.3"
 tempfile = "3"
 hyper-util = { version = "0.1", features = ["tokio"] }
 tower = { version = "0.5", features = ["util"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Used by the guest-boot-probe example, not the production guest.
+procfs = "0.18.0"

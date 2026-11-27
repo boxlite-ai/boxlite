@@ -5,8 +5,8 @@ use boxlite_shared::{
     ContainerAdvancedOptions as ProtoContainerAdvancedOptions,
     ContainerCapabilities as ProtoContainerCapabilities, ContainerClient,
     ContainerConfig as ProtoContainerConfig, ContainerDevice, ContainerInitErrorKind,
-    ContainerInitRequest, ContainerResources, DiskRootfs, LinuxOptions, MergedRootfs, MountOptions,
-    OverlayRootfs, RootfsInit, container_init_response,
+    ContainerInitRequest, ContainerInitResponse, ContainerResources, DiskRootfs, LinuxOptions,
+    MergedRootfs, MountOptions, OverlayRootfs, RootfsInit, container_init_response,
 };
 use tonic::transport::Channel;
 
@@ -112,24 +112,8 @@ impl From<ResolvedContainerSecurityConfig> for ContainerAdvancedConfig {
     }
 }
 
-/// Container service interface.
-pub struct ContainerInterface {
-    client: ContainerClient<Channel>,
-}
-
-impl ContainerInterface {
-    /// Create from a channel.
-    pub fn new(channel: Channel) -> Self {
-        Self {
-            client: ContainerClient::new(channel),
-        }
-    }
-
-    /// Create the container — rootfs, image config, mounts. Does **not** run
-    /// init; call [`Self::start`] for that. Creation and start are separate so
-    /// the host can attach to the main command in between. Returns the
-    /// container id on success.
-    pub async fn init(&mut self, config: ContainerInitConfig) -> BoxliteResult<String> {
+impl From<ContainerInitConfig> for ContainerInitRequest {
+    fn from(config: ContainerInitConfig) -> Self {
         let ContainerInitConfig {
             container_id,
             image,
@@ -212,7 +196,7 @@ impl ContainerInterface {
             "Container configuration"
         );
 
-        let request = ContainerInitRequest {
+        Self {
             container_id: container_id.clone(),
             container_config: Some(proto_config),
             rootfs: Some(rootfs.into_proto()),
@@ -221,18 +205,46 @@ impl ContainerInterface {
             // Init's session id = container_id. The host declares it here so
             // `LiteBox::attach()` can address the main command with the same id
             // it sent, instead of both sides separately hard-coding it.
-            execution_id: container_id.clone(),
+            execution_id: container_id,
             devices,
             resources: Some(resources),
-        };
+        }
+    }
+}
 
+/// Container service interface.
+pub struct ContainerInterface {
+    client: ContainerClient<Channel>,
+}
+
+impl ContainerInterface {
+    /// Create from a channel.
+    pub fn new(channel: Channel) -> Self {
+        Self {
+            client: ContainerClient::new(channel),
+        }
+    }
+
+    /// Create the container without running init, returning its ID.
+    pub async fn init(
+        &mut self,
+        request: impl Into<ContainerInitRequest>,
+    ) -> BoxliteResult<String> {
+        let request = request.into();
+        let container_id = request.container_id.clone();
         let response = self
             .client
             .init(request)
             .await
             .map_err(map_container_init_status)?
             .into_inner();
+        Self::decode_init_response(&container_id, response)
+    }
 
+    pub(super) fn decode_init_response(
+        container_id: &str,
+        response: ContainerInitResponse,
+    ) -> BoxliteResult<String> {
         match response.result {
             Some(container_init_response::Result::Success(success)) => {
                 tracing::debug!(container_id = %success.container_id, "Container initialized");
@@ -380,7 +392,7 @@ impl ContainerInterface {
     }
 }
 
-fn map_container_init_status(status: tonic::Status) -> BoxliteError {
+pub(super) fn map_container_init_status(status: tonic::Status) -> BoxliteError {
     if status.code() == tonic::Code::InvalidArgument {
         return BoxliteError::InvalidArgument(status.message().to_owned());
     }
