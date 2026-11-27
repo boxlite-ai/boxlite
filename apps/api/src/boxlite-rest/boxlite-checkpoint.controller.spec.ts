@@ -29,12 +29,15 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxService } from '../box/services/box.service'
+import { MetricsInterceptor } from '../interceptors/metrics.interceptor'
+import { McpDelegation, MCP_DELEGATION_HEADER } from '../auth/mcp-delegation'
 
 // Real HTTP, Passport API-key validation and organization permission guards;
 // credential storage, membership, Redis and checkpoint persistence are fixtures.
 describe('Checkpoint REST authentication and request admission', () => {
   let app: INestApplication
   const organizationId = 'checkpoint-org'
+  const capture = jest.fn()
   const checkpoints = { create: jest.fn(), list: jest.fn(), get: jest.fn(), remove: jest.fn() }
   const recovery = { createBox: jest.fn() }
   const boxes = { create: jest.fn() }
@@ -145,6 +148,12 @@ describe('Checkpoint REST authentication and request admission', () => {
     }).compile()
     app = module.createNestApplication()
     app.setGlobalPrefix('api')
+    app.useGlobalInterceptors(
+      new MetricsInterceptor(
+        { getOrThrow: () => 'test', get: () => undefined } as never,
+        { enabled: true, capture } as never,
+      ),
+    )
     app.useGlobalFilters(new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never))
     await app.listen(0, '127.0.0.1')
   })
@@ -162,13 +171,70 @@ describe('Checkpoint REST authentication and request admission', () => {
     limits.resolveMaxCreatedBoxes.mockReset().mockResolvedValue(2)
   })
 
-  function request(path: string, token?: string, body?: unknown, method?: string) {
+  function request(path: string, token?: string, body?: unknown, method?: string, headers?: Record<string, string>) {
     return fetch(`http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api${path}`, {
       method: method ?? (body === undefined ? 'GET' : 'POST'),
-      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      headers: {
+        'content-type': 'application/json',
+        ...headers,
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   }
+
+  it.each([
+    ['/v1/checkpoints', 'sdk', 'sdk'],
+    ['/v1/default/checkpoints', 'dashboard', 'dashboard'],
+    ['/v1/checkpoint-org/checkpoints', 'mcp', 'unattributed'],
+    ['/v1/checkpoints', undefined, 'unattributed'],
+  ])('records a finished checkpoint request at %s from %s', async (path, label, source) => {
+    const headers = label ? { 'X-BoxLite-Source': label } : {}
+    capture.mockImplementationOnce(() => new Promise(() => {}))
+    const response = await request(path, 'checkpoint-write-key', { source_box_id: 'private-box' }, 'POST', headers)
+    expect(response.status).toBe(201)
+    expect(capture.mock.calls).toEqual([
+      [
+        {
+          event: 'cloud.api.operation',
+          distinctId: 'owner',
+          timestamp: expect.any(Date),
+          groups: { organization: organizationId },
+          properties: { 'api.operation': 'checkpoint.create', 'client.source': source, 'http.status_class': '2xx' },
+        },
+        { users: ['owner'], organizations: [organizationId] },
+      ],
+    ])
+  })
+
+  it('attributes a consumed MCP delegation and drops denied or polling requests', async () => {
+    const nonce = new McpDelegation().issue({
+      role: SystemRole.USER,
+      userId: 'owner',
+      email: 'fixture@example.test',
+      organizationId,
+    })
+    const response = await request('/v1/checkpoints', undefined, { source_box_id: 'private-box' }, 'POST', {
+      [MCP_DELEGATION_HEADER]: nonce,
+    })
+    expect(response.status).toBe(201)
+    expect(capture.mock.calls[0][0].properties['client.source']).toBe('mcp')
+    capture.mockClear()
+    expect((await request('/v1/checkpoints', 'checkpoint-read-key', { source_box_id: 'private-box' })).status).toBe(403)
+    expect((await request('/v1/checkpoints', 'checkpoint-read-key')).status).toBe(200)
+    expect(capture).not.toHaveBeenCalled()
+  })
+
+  it('records a rejected restore intent without exporting its selector or validation error', async () => {
+    await request('/v1/boxes', 'checkpoint-write-key', { checkpoint_id: 'private', image: 'private-image' })
+    const events = capture.mock.calls.filter(([row]) => row.event === 'cloud.api.operation')
+    expect(events).toHaveLength(1)
+    expect(events[0][0].properties).toEqual({
+      'api.operation': 'checkpoint.restore',
+      'client.source': 'unattributed',
+      'http.status_class': '4xx',
+    })
+  })
 
   it.each(['pageToken', 'page_token'])('passes the %s pagination cursor to checkpoint storage', async (parameter) => {
     const response = await request(`/v1/checkpoints?${parameter}=next-page`, 'checkpoint-write-key')
@@ -313,7 +379,7 @@ describe('Checkpoint REST authentication and request admission', () => {
     expect(recovery.createBox.mock.calls).toEqual(
       Array.from({ length: 3 }, () => [{ id: organizationId }, 'base', 'new-target', 2]),
     )
-    expect(waiter.waitForStarted).toHaveBeenCalledWith('target-id', organizationId, 30)
+    expect(waiter.waitForStarted).toHaveBeenCalledWith('target-id', organizationId, 30, expect.any(Function))
     expect(boxes.create).not.toHaveBeenCalled()
   })
 

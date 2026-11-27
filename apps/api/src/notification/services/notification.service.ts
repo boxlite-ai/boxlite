@@ -49,16 +49,23 @@ export class NotificationService {
 
   @OnEvent(BoxEvents.STATE_UPDATED)
   async handleBoxStateUpdated(event: BoxStateUpdatedEvent) {
+    this.publishBoxTransition(event)
     const dto = await this.boxService.toBoxDto(event.box)
     this.notificationEmitter.emitBoxStateUpdated(dto, event.oldState, event.newState)
-    this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event))
   }
 
   @OnEvent(BoxEvents.DESIRED_STATE_UPDATED)
   async handleBoxDesiredStateUpdated(event: BoxDesiredStateUpdatedEvent) {
+    this.publishBoxTransition(event)
     const dto = await this.boxService.toBoxDto(event.box)
     this.notificationEmitter.emitBoxDesiredStateUpdated(dto, event.oldDesiredState, event.newDesiredState)
-    this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event))
+  }
+
+  private publishBoxTransition(event: BoxStateUpdatedEvent | BoxDesiredStateUpdatedEvent): void {
+    // Readiness waiters need the state as soon as it is observed, before dashboard metadata is loaded.
+    void this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event)).catch((error) => {
+      this.logger.error('Failed to publish box state for readiness waiters', error)
+    })
   }
 
   @OnEvent(VolumeEvents.CREATED)

@@ -76,6 +76,18 @@ service Ssh {
   // Apply supplied fields; absent fields retain their current desired values.
   // With neither field supplied, query live status without initialization or writes.
   rpc Control(SshControlRequest) returns (SshControlResponse);
+  // Drain bounded local authentication observations; never starts a Box.
+  rpc TakeUsage(SshUsageRequest) returns (SshUsageResponse);
+}
+
+message SshUsageRequest {}
+message SshUsageEvent {
+  string id = 1;
+  uint64 occurred_at_ms = 2;
+}
+message SshUsageResponse {
+  repeated SshUsageEvent events = 1;
+  uint64 dropped_total = 2;
 }
 
 // Command execution

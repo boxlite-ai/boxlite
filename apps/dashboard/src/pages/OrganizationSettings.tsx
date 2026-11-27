@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ProductAnalyticsSettings } from '@/components/ProductAnalyticsPreferences'
 import { TabIcon } from '@/components/ui/TabIcon'
 import { AsciiButton } from '@/components/ascii'
 import { ResourceSectionHeading } from '@/components/ResourceLayout'
@@ -142,7 +143,8 @@ const OrganizationSettings: React.FC = () => {
   usePageTitle('Organization')
   const { selectedOrganization } = useSelectedOrganization()
   const [searchParams, setSearchParams] = useSearchParams()
-  const tab = searchParams.get('tab') === 'member' ? 'member' : 'general'
+  const selectedTab = searchParams.get('tab')
+  const tab = selectedTab === 'member' || selectedTab === 'settings' ? selectedTab : 'general'
 
   if (searchParams.get('tab') === 'ci') return <Navigate to={RoutePath.CI_CONNECTS} replace />
 
@@ -158,7 +160,7 @@ const OrganizationSettings: React.FC = () => {
         value={tab}
         onValueChange={(value) => {
           const next = new URLSearchParams(searchParams)
-          if (value === 'member') next.set('tab', value)
+          if (value !== 'general') next.set('tab', value)
           else next.delete('tab')
           setSearchParams(next)
         }}
@@ -173,9 +175,13 @@ const OrganizationSettings: React.FC = () => {
             <TabIcon name="members" />
             Members
           </TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
         <TabsContent value="general" className="pt-6">
           <OrganizationGeneral key={selectedOrganization.id} />
+        </TabsContent>
+        <TabsContent value="settings" className="pt-6">
+          <ProductAnalyticsSettings />
         </TabsContent>
         <TabsContent value="member" className="pt-6">
           <OrganizationMembers key={selectedOrganization.id} />

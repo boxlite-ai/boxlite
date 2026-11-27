@@ -149,6 +149,16 @@ describe('App routes', () => {
     expect(await renderAt('/dashboard/roles')).toBe('boxes page at /dashboard/boxes')
   })
 
+  it('opens the privacy settings through the organization Settings tab', async () => {
+    expect(await renderAt('/dashboard/settings?tab=settings')).toBe(
+      'organization page at /dashboard/settings?tab=settings',
+    )
+  })
+
+  it('treats the retired account settings path as unknown', async () => {
+    expect(await renderAt('/dashboard/user/account-settings')).toBe('not found page')
+  })
+
   it('redirects the legacy members route to the Organization Member tab', async () => {
     expect(await renderAt('/dashboard/members')).toBe('organization page at /dashboard/settings?tab=member')
   })

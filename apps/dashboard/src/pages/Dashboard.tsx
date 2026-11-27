@@ -6,6 +6,7 @@
 
 import React, { Suspense, useEffect, useMemo, useState } from 'react'
 import { matchPath, Outlet, useLocation } from 'react-router-dom'
+import { ProductAnalyticsProvider, AnalyticsConsentCard } from '@/components/ProductAnalyticsPreferences'
 import { SetupHeader } from '@/components/SetupLayout'
 import { OnboardingEntryGate } from '@/components/OnboardingEntryGate'
 import { RoutePath } from '@/enums/RoutePath'
@@ -79,6 +80,7 @@ const Dashboard: React.FC = () => {
         {/* Lazy route components (Admin/Billing/Settings/box-details) suspend
                 here so only the content area shows a fallback — the sidebar/shell
                 stays mounted across navigation. */}
+        <AnalyticsConsentCard />
         <Suspense
           fallback={
             <div className="space-y-3 p-4 sm:p-5">
@@ -128,7 +130,9 @@ const Dashboard: React.FC = () => {
 export default function DashboardEntry() {
   return (
     <OnboardingEntryGate>
-      <Dashboard />
+      <ProductAnalyticsProvider>
+        <Dashboard />
+      </ProductAnalyticsProvider>
     </OnboardingEntryGate>
   )
 }

@@ -980,3 +980,13 @@ Scopes carry explicit Public and Private decisions. Standalone configuration kee
 its Public switch and always permits Private, while hosted policy always permits
 Public and requires explicit Private consent. Existing scope hashes are incompatible:
 finish cleanup with the old Listener and start a fresh journal before upgrading.
+
+## Hosted CI usage
+
+The hosted API uses GitHub's signed `workflow_job` webhooks after inbox admission for a connected organization.
+A valid BoxLite resource label on `queued` emits `cloud.ci.request`. For an assigned JIT runner,
+`in_progress` and `completed` emit `cloud.feature.use` with `runner_started` and `runner_completed` respectively.
+
+The three phases share an opaque Job correlation ID and use GitHub's phase timestamps.
+Each accepted delivery, including a redelivery, generates a separate observation. Count distinct correlation IDs for unique Jobs.
+Analytics uses the existing organization binding and the signed payload without reading worker allocations, polling GitHub, or writing scheduler state.

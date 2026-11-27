@@ -7,6 +7,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import Dashboard from './Dashboard'
 
 const state = vi.hoisted(() => ({ announcements: {} as Record<string, { text: string }>, shellMounts: 0 }))
+vi.mock('react-oidc-context', () => ({
+  useAuth: () => ({ isAuthenticated: true, user: { profile: { sub: 'member' } } }),
+}))
 vi.mock('@/hooks/useConfig', () => ({ useConfig: () => ({ version: 'test', announcements: state.announcements }) }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({ selectedOrganization: undefined }),

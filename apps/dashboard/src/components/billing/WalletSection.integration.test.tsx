@@ -686,6 +686,7 @@ describe('WalletSection top-up checkout', () => {
     expect(topUpButton?.parentElement?.classList.contains('overflow-hidden')).toBe(false)
     // The ribbon must not rename the button for assistive technology.
     expect(topUpButton?.textContent?.trim()).toBe('Top up →')
+    expect(topUpButton?.getAttribute('data-console-action')).toBe('top_up_wallet')
   })
 
   it('shows no discount ribbon without a top-up discount', async () => {

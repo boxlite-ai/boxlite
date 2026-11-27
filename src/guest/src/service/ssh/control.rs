@@ -4,6 +4,13 @@ use tonic::{Request, Response, Status};
 
 #[tonic::async_trait]
 impl Ssh for GuestServer {
+    async fn take_usage(
+        &self,
+        _request: Request<boxlite_shared::SshUsageRequest>,
+    ) -> Result<Response<boxlite_shared::SshUsageResponse>, Status> {
+        Ok(Response::new(self.ssh_manager.take_usage()))
+    }
+
     async fn control(
         &self,
         request: Request<SshControlRequest>,

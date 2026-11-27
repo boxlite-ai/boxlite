@@ -4,8 +4,14 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type Redis from 'ioredis'
+import { setTimeout as delay } from 'node:timers/promises'
+import { AnalyticsConsentService } from '../analytics/services/analytics-consent.service'
+import { ProductAnalyticsConsent1795420800000 } from '../migrations/pre-deploy/1795420800000-product-analytics-consent-migration'
+import Redis from 'ioredis'
 import { DataSource } from 'typeorm'
+import { ConfigService } from '@nestjs/config'
+import { configuration } from '../config/configuration'
+import { TypedConfigService } from '../config/typed-config.service'
 import { ApiKey } from '../api-key/api-key.entity'
 import { apiKeyValidationCacheKey } from '../common/utils/api-key'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
@@ -44,7 +50,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
       entities: [User, Organization, OrganizationInvitation, OrganizationRole, OrganizationUser, ApiKey],
       namingStrategy: new CustomNamingStrategy(),
       synchronize: false,
-      extra: { options: `-c search_path=${schemaName},public` },
+      extra: { options: `-c search_path=${schemaName},public`, application_name: schemaName },
     }).initialize()
     await dataSource.query(`CREATE SCHEMA "${schemaName}"`)
     await dataSource.synchronize()
@@ -135,6 +141,43 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     )
     return rows.map((row) => row.roleId)
   }
+
+  it('rechecks the new creator after moving an organization with cached analytics consent', async () => {
+    await user(PRIMARY)
+    await user(SOCIAL)
+    const org = await organization(SOCIAL, 'Example')
+    const client = new Redis({
+      host: process.env.REDIS_HOST ?? '127.0.0.1',
+      port: Number(process.env.REDIS_PORT ?? 6379),
+      keyPrefix: schemaName + ':',
+      lazyConnect: true,
+      maxRetriesPerRequest: 0,
+      commandTimeout: 1000,
+    })
+    const runner = dataSource.createQueryRunner()
+    const migration = new ProductAnalyticsConsent1795420800000()
+    try {
+      await client.connect()
+      await migration.up(runner)
+      const consent = new AnalyticsConsentService(
+        dataSource,
+        client,
+        new TypedConfigService(new ConfigService(configuration)),
+      )
+      await consent.decide(SOCIAL, true)
+      await delay(3)
+      const subjects = { users: [], organizations: [org] }
+      const send = jest.fn(async () => {})
+      expect(await consent.dispatch(subjects, new Date(), send)).toBe(true)
+      await new LinkedIdentityService(dataSource, client).adopt(PRIMARY, SOCIAL)
+      expect(await consent.dispatch(subjects, new Date(), send)).toBe(false)
+      expect(send).toHaveBeenCalledTimes(1)
+    } finally {
+      client.disconnect()
+      await migration.down(runner)
+      await runner.release()
+    }
+  })
 
   it('does nothing for a social identity BoxLite never saw', async () => {
     await user(PRIMARY)

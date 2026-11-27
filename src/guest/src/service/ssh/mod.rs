@@ -100,6 +100,7 @@ impl SshConfig {
 
 /// Serializes control operations and retains timed-out cleanup until it finishes.
 pub(crate) struct SshManager {
+    usage: boxlite_shared::ssh_usage::SshUsageBuffer,
     guest: OnceLock<Weak<GuestServer>>,
     state: Mutex<SshState>,
     connection_permits: Arc<tokio::sync::Semaphore>,
@@ -122,6 +123,7 @@ use tests::ActivationGate;
 impl Default for SshManager {
     fn default() -> Self {
         Self {
+            usage: boxlite_shared::ssh_usage::SshUsageBuffer::default(),
             guest: OnceLock::new(),
             state: Mutex::new(SshState::default()),
             connection_permits: Arc::new(tokio::sync::Semaphore::new(limits::MAX_CONNECTIONS)),
@@ -130,6 +132,23 @@ impl Default for SshManager {
 }
 
 impl SshManager {
+    pub(crate) fn record_usage(&self) {
+        let occurred_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        self.usage.try_record(boxlite_shared::SshUsageEvent {
+            id: uuid::Uuid::new_v4().to_string(),
+            occurred_at_ms,
+        });
+    }
+
+    pub(crate) fn take_usage(&self) -> boxlite_shared::SshUsageResponse {
+        self.usage.take()
+    }
+
     pub(crate) fn guest(&self) -> Option<Arc<GuestServer>> {
         self.guest.get().and_then(Weak::upgrade)
     }

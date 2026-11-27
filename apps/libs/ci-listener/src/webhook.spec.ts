@@ -56,6 +56,47 @@ describe('CI shared webhook verification', () => {
   it.each([[], ['signed body'], '{}', { length: 1 }, null])('rejects a non-Buffer request body %j', (raw) => {
     expect(() => verifyWebhook({ ...signed(), raw: raw as Buffer }, secret)).toThrow('Raw webhook body required')
   })
+  it('accepts receipts but omits usage evidence for unassigned, external or malformed job activity', () => {
+    const created_at = '2026-11-24T10:30:00Z'
+    const completed_at = '2026-11-24T10:31:00Z'
+    const parse = (status: string, fields: Record<string, unknown>) =>
+      verifyWebhook(
+        signed({
+          ...payload(),
+          action: status,
+          workflow_job: {
+            ...payload().workflow_job,
+            status,
+            created_at,
+            completed_at,
+            runner_name: 'ci-jit-' + 'f'.repeat(32),
+            runner_id: 42,
+            ...fields,
+          },
+        }),
+        secret,
+      )
+    for (const fields of [
+      { runner_id: null },
+      { runner_name: 'other-runner' },
+      { runner_name: null },
+      { labels: ['ubuntu-latest'] },
+      { labels: ['boxlite', 'boxlite-2vcpu-4gbmem-10gbdisk'] },
+      { created_at: null },
+      { completed_at: 'bad date' },
+      { completed_at: '2026-11-24T10:29:00Z' },
+    ]) {
+      const receipt = parse('completed', fields)
+      expect(receipt?.observation?.status).toBe('completed')
+      expect(receipt?.jobTiming).toBeUndefined()
+    }
+    expect(parse('queued', { created_at: 'bad date' })?.jobTiming).toBeUndefined()
+    expect(parse('in_progress', {})?.jobTiming).toBeUndefined()
+    expect(parse('completed', { labels: ['boxlite-2vcpu-4gbmem-10gbdisk'] })?.jobTiming).toEqual({
+      createdAt: created_at,
+      occurredAt: completed_at,
+    })
+  })
   it('verifies original bytes and normalizes a GitHub delivery identifier', () => {
     const notification = verifyWebhook(signed(payload(), 'A1234567-1111-2222-3333-444444444444'), secret)!
     expect(notification).toMatchObject({

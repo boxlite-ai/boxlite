@@ -43,6 +43,7 @@ import { useApiBodyParsers } from './mcp/mcp-body'
 import { McpTools } from './mcp/mcp-tools'
 import { servedOperations } from './mcp/mcp-routes'
 import { CiListenerService } from './ci/ci-listener.service'
+import { captureRequestTiming } from './common/utils/request-timing.util'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -62,6 +63,7 @@ async function bootstrap() {
     // after authentication.
     bodyParser: false,
   })
+  app.use(captureRequestTiming)
   installCiWebhookBodyParser(app)
   app.useLogger(app.get(PinoLogger))
   app.flushLogs()

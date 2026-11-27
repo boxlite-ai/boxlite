@@ -754,7 +754,7 @@ accept this field before rolling out the added response property.
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
 per business event; the attributes reach OTLP through nestjs-pino, where alerts query them.
-The same sanitized attributes reach PostHog through the client shared with HTTP metrics.
+Eligible events send the same sanitized attributes through the consent-checked client shared with HTTP metrics.
 Activity does not require the optional logging ClickHouse instance.
 
 | Event                                               | Recorded by                                                                                                                                                                                                        | Outcomes                                                    |
@@ -821,16 +821,239 @@ id for box and tunnel events (volume ID or an API-key attempt UUID for those mut
 can be counted from the log alone. `user.login` has none, since a login spans organizations, and a
 registration carries its default organization on success only.
 
+### Occurrence identity and job timing
+
+Every business-event occurrence has an `event.id` UUID, created once before logging and analytics fan-out.
+PostHog receives it through the capture `uuid` option; both sinks receive the same `event.timestamp`.
+That field records source occurrence time when supplied, otherwise observation time.
+
+Native OTLP log time remains observation time. Replaying yesterday's completed job produces
+a log today with yesterday's `event.timestamp`. Operational occurrence-time queries must use that attribute.
+
+| Field                                                  | Source and meaning                                                   |
+| ------------------------------------------------------ | -------------------------------------------------------------------- |
+| `event.id`                                             | Occurrence UUID, separate from resource identity                     |
+| `job.id`                                               | Existing runner Job ID                                               |
+| `job.created_at`, `job.started_at`, `job.completed_at` | Valid timestamps from the persisted Job                              |
+| `job.duration_ms`                                      | Milliseconds from Job creation to completion, serialized as a string |
+
+Finished job outcomes derive occurrence identity from Job ID, event name and logical outcome.
+Repeated observations retain their UUID, completion time and duration; different jobs on one Box remain distinct.
+`JobService` preserves the first terminal timestamp while allowing result metadata refresh and completion callbacks.
+
+| Available source timing                | Emitted evidence                                                                 |
+| -------------------------------------- | -------------------------------------------------------------------------------- |
+| Job ID and valid completion time       | Stable replay identity and source occurrence time                                |
+| Valid, ordered creation and completion | `job.duration_ms`, including zero                                                |
+| Valid start time                       | `job.started_at`, independently of duration eligibility                          |
+| Missing or invalid completion          | Ordinary occurrence identity; unsupported completion fields and duration omitted |
+
+Job timing excludes the customer's request before job creation and does not establish guest application readiness.
+Checkpoint-import outcomes use the accepted business receipt; an invalid receipt remains an exception even if its transport job completed.
+Source payloads and raw runner errors are excluded.
+
+### Cloud readiness metrics
+
+`cloud.box.create`, `cloud.box.start` and `cloud.box.resume` record server-side attempts through the shared PostHog/operational-log recorder.
+They carry `cloud_metrics_schema = '1'` in PostHog and have no `activity_schema`.
+Existing Activity operation totals exclude this event family.
+
+REST create/start observations cover canonical and prefixed v1 routes whose handlers wait for `STARTED`.
+Resume observations cover API proxy requests, WebSocket attaches and preview `ensure-ready`.
+Each caller that observes a pending start records one resume attempt, including when the Box reaches `STARTED` during lifecycle lock acquisition. Already-ready traffic emits no resume attempt. A stop-then-start wait counts as one attempt.
+
+HTTP ingress time is captured before body parsing and authentication, then only admitted operations are recorded.
+WebSocket timing starts at upgrade dispatch. A successful duration ends when the API observes `STARTED`, before dashboard notification enrichment and response metadata reads such as last activity. Client networking and guest application readiness are outside this measurement.
+
+| Attribute                | Contract                                                           |
+| ------------------------ | ------------------------------------------------------------------ |
+| `operation.id`           | UUID per invocation, shared by requested and terminal occurrences  |
+| `operation.requested_at` | Original initiation time, retained on the terminal event           |
+| `operation.scope`        | `rest_api` or `proxy_api`                                          |
+| `operation.boundary`     | `cloud_api_to_started`                                             |
+| `operation.duration_ms`  | Nonnegative monotonic elapsed milliseconds, serialized as a string |
+| `operation.result`       | `success`, `service_error`, `timeout`, `user_error` or `cancelled` |
+| `box.id`                 | Resolved resource ID when known; raw request names excluded        |
+
+For this event family, `correlation.id` identifies the operation; use `box.id` for the resource.
+Requested and terminal occurrences have different `event.id` values. A terminal observation is recorded once per invocation.
+
+Runtime transition failures count as `service_error` while preserving their existing HTTP 400 response.
+HTTP 408/504 count as `timeout`; other 4xx responses count as `user_error`.
+Unexpected errors and 5xx responses count as `service_error`; observable cancellation is separate.
+
+Guard refusals precede these observations. Resume policy checks before `ensureReady` and asynchronous dashboard admission routes remain outside this request cohort.
+Direct service invocation uses invocation time when an ingress timestamp is unavailable.
+
+`traffic.kind` is `unknown`: source headers do not prove probe or external customer identity.
+Use authoritative organization classification before presenting separate customer/probe rates.
+
+Delivery remains best effort. A process exit can leave a requested occurrence without its terminal observation;
+report that sample as unobserved, rather than inventing a timeout.
+
+Recorded timeouts remain failures if the Box later becomes ready.
+Count distinct `operation.id` values and assign results to their initiation window.
+Success rate is successes divided by successes plus service failures and timeouts; show user errors, cancellations and unobserved attempts separately.
+
+Compute P50/P95 from successful `operation.duration_ms` values, with sample size and failure counts alongside.
+For example, this HogQL query groups terminal duplicates before calculating successful readiness timing:
+
+```sql
+SELECT event, count() AS samples,
+       quantile(0.50)(duration_ms) / 1000 AS p50_seconds,
+       quantile(0.95)(duration_ms) / 1000 AS p95_seconds
+FROM (
+  SELECT event, properties['operation.id'] AS operation_id,
+         min(toFloat(properties['operation.duration_ms'])) AS duration_ms
+  FROM events
+  WHERE properties.cloud_metrics_schema = '1'
+    AND properties.environment = '<producer-environment>'
+    AND properties['operation.result'] = 'success'
+    AND properties['operation.boundary'] = 'cloud_api_to_started'
+    AND properties['operation.requested_at'] >= '2026-11-01T00:00:00.000Z'
+    AND properties['operation.requested_at'] < '2026-11-08T00:00:00.000Z'
+    AND timestamp >= toDateTime('2026-11-01 00:00:00')
+    AND timestamp < toDateTime('2026-11-08 00:05:00')
+  GROUP BY event, operation_id
+)
+GROUP BY event
+```
+
+This example has not run against a live PostHog project.
+Initiation timestamps are canonical UTC ISO strings; the five-minute completion grace is illustrative.
+Choose and disclose an observation cutoff, and check ingestion loss, source clocks and organization classification separately.
+
+See PostHog's [aggregations](https://posthog.com/docs/sql/aggregations) and
+[type conversions](https://posthog.com/docs/sql/expressions) for the supported query functions.
+
+### Cloud feature-use evidence
+
+`cloud.feature.use` reports accepted SSH authentication, successful preview forwarding,
+established tunnels, GitHub-reported CI job activity on an assigned BoxLite JIT runner, successful starts with tenant-owned images and committed checkpoint use.
+It uses `cloud_metrics_schema='1'` and the same occurrence UUID/time in PostHog and OTLP logs.
+
+| Feature      | Evidence boundary                                                                                                           | Excluded evidence                                                           |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| SSH          | Accepted signed key or certificate, once per authenticated connection                                                       | Key probes, denied logins, SSH configuration                                |
+| Tunnel       | Accepted CONNECT with a Runner connection, HTTP 101, or guest HTTP 2xx/3xx                                                  | Tunnel preparation, authorization failures, failed upstream requests        |
+| CI           | Signed `workflow_job.in_progress` or `completed` with a BoxLite label and assigned JIT runner | Worker creation, queued jobs, external runners, unassigned cancellations       |
+| Custom image | Successful create/start job with stored `imageIsOrgOwned=true`                                                              | Admission alone, failed jobs, curated images, unknown historical provenance |
+| Checkpoint | Archive upload committed as ready (`archive_ready`), or an owned import receipt committed as completed (`box_restored`) | Create clicks, queued exports, failed or cancelled imports and replay |
+
+Feature attributes are `feature.name`, `feature.evidence` and `feature.source`.
+`correlation.id` identifies the CI Job for CI events and the Box for other features. Login, key, command, URL, repository and workflow names are omitted.
+Source evidence does not identify customer versus internal/probe traffic; use an authoritative organization cohort.
+
+`POST /api/telemetry/feature-usage` accepts at most 100 observations using existing Runner/Proxy authentication.
+Customer credentials are refused. The API resolves organization from the stored Box and checks Runner ownership;
+producers cannot choose a tenant. Only SSH evidence is accepted from Runners, and only tunnel evidence from Proxies.
+Unknown/deleted Boxes, warm stock, incompatible producers and timestamps outside seven days old/five minutes future are excluded.
+The response's `accepted` count measures local capture calls. Each observation starts its consent check independently.
+Eligible cache hits can be delivered while unrelated observations in the same batch are still waiting for PostgreSQL.
+The API returns without waiting for consent checks or HTTP delivery.
+
+```mermaid
+flowchart LR
+    SSH[Guest accepted SSH auth] --> Buffer[Local buffer: 128]
+    Buffer --> Collector[Runner background polling]
+    Proxy[Proxy forwarding] --> Queue[Nonblocking queue: 1024]
+    Collector --> Queue
+    Queue --> Batch[Background batches: 100]
+    Batch --> Ingest[API ownership validation]
+    CI[Managed CI execution] --> Event[Business event]
+    Image[Started tenant image] --> Event
+    Ingest --> Event
+    Event --> Consent[Check personal and creator grants]
+    Consent -->|Eligible| PH[PostHog]
+    Event --> OTLP[OTLP / HyperDX]
+```
+
+Guest producers use a try-lock; a full or contended buffer drops evidence.
+Runners poll every five seconds, with four concurrent one-second reads and at most 64 Boxes per round, rotating across larger inventories.
+Reads never boot a VM. The native/Go SDK exposes an explicit local drain; it does not send analytics.
+Older Guests return Unsupported. Run API ingestion before enabling reporting binaries, and ship the updated Guest with the native library to collect SSH.
+
+The Cloud reporter uses a dedicated HTTP transport, a one-second flush timer and a two-second request deadline, without retries or redirects.
+Forwarding and SSH authentication never await uploads; shutdown cancels uploads instead of flushing them synchronously.
+Overflow and collection failures have diagnostics, and failed uploads count observations as delivery-unconfirmed.
+API rejection counts are logged separately. Memory queues are volatile; process/Guest exits, failed drains and resource deletion can lose evidence.
+The hosted API records CI activity after accepting a signed GitHub `workflow_job` webhook for a connected organization.
+A BoxLite resource label on `queued` emits `cloud.ci.request` at `created_at`.
+An assigned runner ID and BoxLite JIT name on `in_progress` or `completed` emit `runner_started` at `started_at` or `runner_completed` at `completed_at`.
+Completion counts the reported end of execution for every conclusion, including failure.
+The creator's current analytics grant must cover Job creation (`ci.job_created_at` on usage events), including for delayed deliveries.
+Each accepted receipt has its own event ID. All three phases share an opaque Job correlation ID, derived from installation, repository and Job IDs.
+Count distinct correlation IDs for unique Jobs or event IDs for observations. Missing webhooks and dropped analytics can leave a partial lifecycle.
+These observations identify the receiving API environment and organization. They do not identify the executing Box or Listener.
+
+Adoption is the intersection of feature-using organizations with an explicitly eligible, active organization cohort.
+Do not label all organizations eligible, or an absent event as confirmed non-use.
+These events do not supply a capability/entitlement snapshot or a customer/probe organization registry.
+Keep that eligibility cohort authoritative and report telemetry coverage separately.
+
+This illustrative HogQL query returns per-organization usage and distinct UTC usage days for a chosen week;
+it does not prescribe an eligibility denominator or a repeat-use threshold:
+
+```sql
+SELECT properties['organization.id'] AS organization_id,
+       properties['feature.name'] AS feature,
+       uniq(properties['event.id']) AS observations,
+       uniq(toDate(toTimeZone(timestamp, 'UTC'))) AS usage_days
+FROM events
+WHERE event = 'cloud.feature.use'
+  AND properties.cloud_metrics_schema = '1'
+  AND properties.environment = '<producer-environment>'
+  AND properties['event.outcome'] = 'success'
+  AND (feature != 'ci' OR properties['feature.evidence'] IN ('runner_started', 'runner_completed'))
+  AND timestamp >= toDateTime('2026-11-01 00:00:00', 'UTC')
+  AND timestamp < toDateTime('2026-11-08 00:00:00', 'UTC')
+GROUP BY organization_id, feature
+```
+
+The query has not run against a live PostHog project. Supply the eligible cohort before computing adoption or repeat-use percentages.
+For time-aligned operation success, join requested and terminal `cloud.box.*` occurrences on `operation.id`,
+filter `operation.requested_at` into the reporting window, and disclose the terminal observation cutoff.
+A timeout stays a timeout; a missing terminal remains unobserved.
+
+### Cloud API product operations
+
+Filter on `properties.environment` to select the deployment for Cloud API operations, Console pageviews and clicks, and lifecycle events. Events ingested before these producers carried the field can have an unknown environment.
+
+Use `cloud.api.operation` for finished Cloud API requests. Select `properties['api.operation']` for the action, `properties['http.status_class']` for `2xx`, `4xx` or `5xx`, and `properties['client.source']` for attribution. For example, filter on `image.alias.create` and `2xx` to count successful alias requests across the supported clients. Each completed HTTP attempt counts separately, including client retries.
+
+| Product | Actions measured |
+| --- | --- |
+| Boxes, executions, files | Create, delete, start, stop, recover, request an attach ticket, start/signal/kill an execution, upload/download files |
+| Network, SSH, tunnels | Update inbound/outbound settings, configure/enable/disable SSH, prepare/revoke a tunnel |
+| Checkpoints | Request capture, delete, create a Box from a checkpoint (`checkpoint.restore`) |
+| Images, registries, volumes | Add/remove an alias, remove an image, create/update/delete credentials, create/delete a volume |
+| Domains | Claim, bind, unbind; create, verify, prepare, advance or delete a custom domain |
+| CI | Start/cancel a connection flow, select/complete an installation, update/remove a connection, change CI settings |
+| Onboarding and billing actions | Rename an organization, save onboarding, create/copy a quickstart handoff, submit a coupon claim or cancellation feedback. Only the operation and HTTP result are captured. |
+| Organization infrastructure | Create/update/delete a region, rotate its proxy key, create/delete one's own API key, open the webhook portal |
+
+For `volume.create`, group by `volume.storage_backend` to distinguish standard object storage (`standard`) from GCP Filestore (`performance`). The field reflects the requested class, including the default `standard` when omitted. Filter on `http.status_class=2xx` for successful requests. An unrecognized or null class leaves the field absent. Historical events without the field have an unknown class.
+
+Both v1 route spellings and the equivalent Console routes use the same action where available. The shared native SDK and CLI report `sdk`, the Dashboard reports `dashboard`, and verified in-process tool delegation reports `mcp`. Client source is descriptive; unmarked or unrecognized clients are `unattributed`.
+
+The HTTP response must finish after the guards verify the actor's organization membership. The request admission time anchors the consent check for the member and the org creator. A full queue, disabled analytics or early disconnect drops the measurement. The listener does no network or database work that the handler must await.
+
+Status polling, terminal resize frames, credential introspection and local-only SDK calls produce no operation rows. File and execution requests contribute at most one row per finished HTTP response, regardless of stream size. Use `cloud.feature.use` for committed checkpoint outcomes, an actual SSH session or tunnel traffic; the HTTP rows measure different stages and should not be summed with click or feature events.
+
 ### Querying Activity in PostHog
 
 The producer uses the existing `POSTHOG_API_KEY`, `POSTHOG_HOST` and `POSTHOG_ENVIRONMENT` settings.
 Cloud deployments set `POSTHOG_ENVIRONMENT` to the deployed stage name on both AWS and GCP.
 Without the key or host, analytics is disabled while business operations and operational logs continue.
-AnalyticsService owns disabled-source and capture-error handling; the interceptor skips request extraction
-when analytics is disabled.
-Delivery is queued and best effort; application shutdown waits up to five seconds for the shared client.
-SDK diagnostics are separate from the sanitized business-event payload. Retention follows the PostHog
-project; BoxLite does not provision a second store or guarantee 400 days of history.
+Product analytics requires a current, explicit personal grant. An organization inherits its recorded creator’s choice. An event that identifies both a person and an organization needs both grants. An unknown subject, an unavailable decision, or an event predating the most recent grant produces no PostHog event. Dashboard activity and Cloud metrics therefore describe the consenting population. Operational logging, metering and functional flag evaluation run independently.
+
+Each event gets an asynchronous consent check and, if eligible, one HTTP attempt. An API instance shares concurrent reads for the same subject.
+Only messages needing a SQL lookup count towards the per-process backlog. Set `POSTHOG_CONSENT_BACKLOG_LIMIT` in the mstage API group to override the default of 1,000. Each excess message increments `posthog_consent_backlog_dropped_total`.
+Up to two SQL consent reads run concurrently on a pool of at least three connections, one on a pool of two, and none on a pool of one.
+The SQL slot is released after the query. HTTP deliveries have no application-level concurrency limit.
+Redis caches each organization creator and each user's grant time or denial for 30 seconds. A cache miss reads PostgreSQL without an explicit lock; the read finishes before the PostHog transfer.
+Saving a choice invalidates that user's cache entry, and linking accounts invalidates the moved organizations' cached creators. An in-flight transfer may finish after withdrawal. A stale cache entry expires within 30 seconds.
+The Console reads membership and effective consent together when loading organization preferences. A saturated consent backlog or unavailable Redis, database or transport can lose optional analytics. Retention follows the PostHog project.
 
 An Activity consumer needs the PostHog **API origin** (for example `https://us.posthog.com`, distinct
 from an ingestion origin such as `https://us.i.posthog.com`), project ID and a backend-only personal
@@ -859,7 +1082,7 @@ The example documents the contract; it has not been executed against a live Post
 
 | Activity field       | PostHog value                                                                            |
 | -------------------- | ---------------------------------------------------------------------------------------- |
-| Event/time           | `event`, `timestamp` (the original event emission time)                                  |
+| Event/time           | `event`, `timestamp` (source occurrence time, otherwise emission time)                   |
 | Outcome/entity       | `properties['event.outcome']`, `properties['correlation.id']`                            |
 | Organization/person  | `properties['organization.id']`, optional `properties['user.id']`                        |
 | Actor/reason/failure | `properties['actor.kind']`, `properties['event.reason']`, `properties['exception.type']` |
@@ -1808,15 +2031,15 @@ promised. Deployment and dev data reset remain operator actions.
 
 The removal release deletes these operations (paths relative to the hosted API base):
 
-| Removed operation | Supported path or behavior |
-| --- | --- |
-| `POST /users/{id}/regenerate-key-pair` | SSH gateway keys have no consumer; account creation no longer generates them |
-| `GET /box/{id}/telemetry/logs`, `traces`, `traces/{traceId}`, `metrics` | Dashboard queries the independent Analytics API |
-| `GET /object-storage/push-access` | Runner archives use infrastructure credentials; managed volumes retain their own S3 provisioning |
-| `GET /box` | Use `/box/paginated` or portable `/v1` listing |
-| `PUT /box/{id}/labels` | No replacement mutation; stored labels and label filters remain |
+| Removed operation                                                            | Supported path or behavior                                                                                  |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `POST /users/{id}/regenerate-key-pair`                                       | SSH gateway keys have no consumer; account creation no longer generates them                                |
+| `GET /box/{id}/telemetry/logs`, `traces`, `traces/{traceId}`, `metrics`      | Dashboard queries the independent Analytics API                                                             |
+| `GET /object-storage/push-access`                                            | Runner archives use infrastructure credentials; managed volumes retain their own S3 provisioning            |
+| `GET /box`                                                                   | Use `/box/paginated` or portable `/v1` listing                                                              |
+| `PUT /box/{id}/labels`                                                       | No replacement mutation; stored labels and label filters remain                                             |
 | `POST /box/{id}/autostop/{interval}`, `POST /box/{id}/autodelete/{interval}` | Set `auto_stop` and `auto_delete` in seconds when creating a Box through `/v1`; dynamic updates are retired |
-| `GET /volumes/by-name/{name}` | Look up volumes by ID; managed-volume selectors still accept names |
+| `GET /volumes/by-name/{name}`                                                | Look up volumes by ID; managed-volume selectors still accept names                                          |
 
 Removed operations return 404 and are absent from regenerated TypeScript and Go cloud clients.
 External consumers must stop calling them before this release; absence of repository callers does not establish absence of external use.

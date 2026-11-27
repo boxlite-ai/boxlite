@@ -54,6 +54,7 @@ extern void goBoxliteOnExecutionResize(CBoxliteError *err, void *ud);
 extern void goBoxliteOnTunnelForwarderWait(CBoxliteError *err, void *ud);
 extern void goBoxliteOnTunnelForwarderClose(CBoxliteError *err, void *ud);
 
+extern void goBoxliteOnSSHUsage(char *json, CBoxliteError *err, void *ud);
 extern void goBoxliteOnSSHStatus(CSshStatus *status, CBoxliteError *err, void *ud);
 
 CBoxStdoutCb cbStdout(void) { return (CBoxStdoutCb)goBoxliteOnStdout; }
@@ -63,6 +64,9 @@ CBoxExitCb cbExit(void) { return (CBoxExitCb)goBoxliteOnExit; }
 CBoxCreateBoxCb cbCreateBox(void) { return (CBoxCreateBoxCb)goBoxliteOnCreateBox; }
 CBoxExportCb cbBoxExport(void) {
     return (CBoxExportCb)goBoxliteOnBoxExport;
+}
+CBoxSshUsageCb cbSSHUsage(void) {
+    return (CBoxSshUsageCb)goBoxliteOnSSHUsage;
 }
 CRuntimeImportCb cbRuntimeImport(void) {
     return (CRuntimeImportCb)goBoxliteOnRuntimeImport;

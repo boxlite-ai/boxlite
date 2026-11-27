@@ -258,15 +258,15 @@ if err != nil {
 fmt.Println(pull.Reference, pull.ConfigDigest, pull.LayerCount)
 ```
 
-| Method | Local runtime | REST runtime |
-|--------|---------------|--------------|
-| `Pull` | Pulls into the cache | `ErrUnsupported`: creating a box pulls |
-| `List` | One row per cached reference | Catalog alias and digest references |
-| `Get` | The cache entries under the name | The catalog entry with its versions |
-| `Remove` | Forgets the name; layers stay | Removes the catalog entry; `ErrInvalidState` while a box can boot from it |
-| `Usage` | `ErrUnsupported` | `ImageUsage{Count, Limit, KnownBytes}` |
-| `CreateAlias` | `ErrUnsupported` | Creates a new alias; existing names conflict |
-| `DeleteAlias` | `ErrUnsupported` | Removes only the named alias |
+| Method        | Local runtime                    | REST runtime                                                              |
+| ------------- | -------------------------------- | ------------------------------------------------------------------------- |
+| `Pull`        | Pulls into the cache             | `ErrUnsupported`: creating a box pulls                                    |
+| `List`        | One row per cached reference     | Catalog alias and digest references                                       |
+| `Get`         | The cache entries under the name | The catalog entry with its versions                                       |
+| `Remove`      | Forgets the name; layers stay    | Removes the catalog entry; `ErrInvalidState` while a box can boot from it |
+| `Usage`       | `ErrUnsupported`                 | `ImageUsage{Count, Limit, KnownBytes}`                                    |
+| `CreateAlias` | `ErrUnsupported`                 | Creates a new alias; existing names conflict                              |
+| `DeleteAlias` | `ErrUnsupported`                 | Removes only the named alias                                              |
 
 `Get` and `Remove` take an image name such as `"docker.io/library/alpine"`. A
 reference with a tag or digest fails with `ErrInvalidArgument`, since a remove
@@ -319,10 +319,10 @@ if err := registries.Remove(ctx, login.ID); err != nil {
 }
 ```
 
-| Method | Returns or fails with |
-|--------|-----------------------|
-| `List` | Every login, oldest first |
-| `Create` | The login; `ErrAlreadyExists` while one is held for the same registry and prefix |
+| Method   | Returns or fails with                                                                                                                             |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `List`   | Every login, oldest first                                                                                                                         |
+| `Create` | The login; `ErrAlreadyExists` while one is held for the same registry and prefix                                                                  |
 | `Remove` | `ErrInvalidState` naming the boxes while one pulls through it; `ErrNotFound` for an unknown id; `ErrInvalidArgument` for an id that is not a UUID |
 
 The password is sent once and never returned: `RegistryCredential` has no
@@ -443,6 +443,13 @@ enabled, err := box.SSH().Enable(ctx) // reuse saved configuration
 if err != nil { log.Fatal(err) }
 fmt.Println(enabled.Enabled) // true
 ```
+
+`box.SSH().TakeUsage(ctx)` explicitly drains accepted authentication evidence from a local Guest.
+It returns `SSHUsageBatch` (`Events` with `ID` and epoch-millisecond `OccurredAtMS`, plus `DroppedTotal`).
+The volatile buffer holds at most 128 entries and drops on contention or overflow.
+The read has a one-second RPC budget, never starts a Box and returns an empty batch for an idle local Box.
+REST runtimes and older Guests return `ErrUnsupported`. A failed or canceled drain can lose evidence.
+The SDK performs no analytics upload; Cloud Runner owns its background reporting.
 
 `SSH` has no `Close`: it refers to its `Box` and shares the box's and
 runtime's lifetime.

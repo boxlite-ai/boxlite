@@ -161,6 +161,37 @@ extern "C" fn record_status(status: *mut CSshStatus, error: *mut FFIError, user_
     }
 }
 
+extern "C" fn record_unsupported_usage(
+    json: *mut c_char,
+    error: *mut FFIError,
+    user_data: *mut c_void,
+) {
+    assert!(json.is_null());
+    unsafe {
+        let delivery = &mut *user_data.cast::<Delivery>();
+        delivery.code = Some((*error).code);
+    }
+}
+
+#[test]
+fn ssh_usage_on_rest_reports_unsupported_via_drain() {
+    let box_ = SshBox::on_rest_server(&[BOX_RUNNING]);
+    let delivery = box_.deliver(|user_data, error| unsafe {
+        boxlite_box_ssh_take_usage(
+            box_.box_handle,
+            Some(record_unsupported_usage),
+            user_data,
+            error,
+        )
+    });
+    assert_eq!(delivery.code, Some(BoxliteErrorCode::Unsupported));
+    assert_eq!(
+        box_.requests_received().len(),
+        1,
+        "only the initial box lookup reaches REST"
+    );
+}
+
 /// Drain until `ready` holds; panics with `what` after ~20s.
 fn drain_until(runtime: *mut RuntimeHandle, what: &str, ready: impl Fn() -> bool) {
     let mut error = FFIError::default();
@@ -650,6 +681,22 @@ fn null_pointers_and_callbacks_are_refused_before_queueing() {
     let code =
         unsafe { boxlite_box_ssh_status(ptr::null_mut(), None, ptr::null_mut(), &mut error) };
     check("status: null callback", code, &error, "cb is null");
+
+    let mut error = FFIError::default();
+    let code = unsafe {
+        boxlite_box_ssh_take_usage(
+            ptr::null_mut(),
+            Some(record_unsupported_usage),
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+    check("usage: null handle", code, &error, "handle is null");
+
+    let mut error = FFIError::default();
+    let code =
+        unsafe { boxlite_box_ssh_take_usage(ptr::null_mut(), None, ptr::null_mut(), &mut error) };
+    check("usage: null callback", code, &error, "cb is null");
 
     let mut error = FFIError::default();
     let code = unsafe {

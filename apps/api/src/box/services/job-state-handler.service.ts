@@ -137,7 +137,7 @@ export class JobStateHandlerService {
       // Warm-pool top-up creates stock no one requested; the claim records
       // that box's box.create pair instead (BoxService.assignWarmPoolBox).
       if (box.organizationId !== BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
-        recordBoxJobOutcome('box.create', job.status, box)
+        recordBoxJobOutcome('box.create', job.status, box, job)
       }
     } catch (error) {
       this.logger.error(`Error handling CREATE_BOX job completion for box ${boxId}:`, error)
@@ -183,7 +183,7 @@ export class JobStateHandlerService {
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
-      recordBoxJobOutcome('box.start', job.status, box)
+      recordBoxJobOutcome('box.start', job.status, box, job)
     } catch (error) {
       this.logger.error(`Error handling START_BOX job completion for box ${boxId}:`, error)
     }
@@ -222,7 +222,7 @@ export class JobStateHandlerService {
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
-      recordBoxJobOutcome('box.stop', job.status, box)
+      recordBoxJobOutcome('box.stop', job.status, box, job)
     } catch (error) {
       this.logger.error(`Error handling STOP_BOX job completion for box ${boxId}:`, error)
     }
@@ -255,7 +255,7 @@ export class JobStateHandlerService {
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
-      recordBoxJobOutcome('box.delete', job.status, box)
+      recordBoxJobOutcome('box.delete', job.status, box, job)
       return true
     } catch (error) {
       this.logger.error(`Error handling DESTROY_BOX job completion for box ${boxId}:`, error)

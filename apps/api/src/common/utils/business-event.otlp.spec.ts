@@ -59,6 +59,7 @@ describe('recordBusinessEvent through the API logging stack', () => {
     expect(record?.attributes).toEqual(
       expect.objectContaining({
         'event.name': 'box.delete',
+        'event.id': expect.any(String),
         'event.outcome': 'requested',
         'correlation.id': 'box-1',
         'actor.kind': 'platform',

@@ -96,6 +96,15 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
           <Button className="mt-6 h-10 w-full" onClick={() => void register()} disabled={!token || submitting}>
             {submitting ? 'Creating account…' : 'Create account'}
           </Button>
+          <p className="mt-2 text-center text-meta text-muted-foreground">
+            <a className="underline" href="https://boxlite.ai/legal/terms" target="_blank" rel="noopener noreferrer">
+              Terms of Service
+            </a>
+            {' · '}
+            <a className="underline" href="https://boxlite.ai/legal/privacy" target="_blank" rel="noopener noreferrer">
+              Privacy Policy
+            </a>
+          </p>
         </>
       ) : (
         <Button onClick={() => void account.refetch()} disabled={account.isFetching}>

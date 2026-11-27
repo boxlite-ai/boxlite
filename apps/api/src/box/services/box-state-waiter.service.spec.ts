@@ -8,8 +8,11 @@ import { HttpStatus, RequestTimeoutException } from '@nestjs/common'
 import { BoxProgressPhase } from '../enums/box-progress-phase.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-timeout.error'
+import { BoxReadinessError } from '../errors/box-readiness.error'
 import { BoxStateWaiterService } from './box-state-waiter.service'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
+import { NotificationService } from '../../notification/services/notification.service'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
 
 function makeWaiter(initialState = BoxState.STARTING, toBoxDto?: (box: any) => Promise<any>) {
   const subscriber = new EventEmitter() as any
@@ -48,11 +51,56 @@ describe('BoxStateWaiterService', () => {
 
     const error = await waiter.waitForStarted('box-1', 'org-1', 1).catch((failure) => failure)
 
+    expect(error).toBeInstanceOf(BoxReadinessError)
+    expect(error.getStatus()).toBe(400)
     expect(error.getResponse()).toMatchObject({
       message: 'Box state transition failed: runner has not declared filestore',
       code: 'BOX_STATE_TRANSITION_FAILED',
       boxId: 'box-1',
     })
+  })
+
+  it.each(['state', 'desired state'])('observes the %s notification before dashboard enrichment', async (kind) => {
+    const { waiter, subscriber } = makeWaiter()
+    const onStarted = jest.fn()
+    const pending = waiter.waitForStarted('box-1', 'org-1', 5, onStarted)
+    await new Promise((resolve) => setImmediate(resolve))
+
+    let release!: () => void
+    const metadata = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const box = { id: 'box-1', state: BoxState.STARTED } as never
+    const emitter = { emitBoxStateUpdated: jest.fn(), emitBoxDesiredStateUpdated: jest.fn() }
+    const notifications = new NotificationService(
+      emitter as never,
+      {} as never,
+      {
+        toBoxDto: async () => {
+          await metadata
+          return { lastActivityAt: 'enriched' }
+        },
+      } as never,
+      { publish: async (channel: string, message: string) => subscriber.emit('message', channel, message) } as never,
+    )
+    const dispatch =
+      kind === 'state'
+        ? notifications.handleBoxStateUpdated({ box, oldState: BoxState.STARTING, newState: BoxState.STARTED })
+        : notifications.handleBoxDesiredStateUpdated({
+            box,
+            oldDesiredState: BoxDesiredState.STOPPED,
+            newDesiredState: BoxDesiredState.STARTED,
+          })
+    const notify = kind === 'state' ? emitter.emitBoxStateUpdated : emitter.emitBoxDesiredStateUpdated
+    try {
+      expect(onStarted).toHaveBeenCalledTimes(1)
+      expect(notify).not.toHaveBeenCalled()
+    } finally {
+      release()
+      await dispatch
+      await pending
+    }
+    expect(notify.mock.calls[0][0]).toEqual({ lastActivityAt: 'enriched' })
   })
 
   it('rejects instead of returning a non-target state on timeout', async () => {

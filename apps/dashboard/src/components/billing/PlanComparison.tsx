@@ -185,6 +185,7 @@ export function PlanComparison({
                             className="h-8 w-auto px-3"
                             variant={cta.disabled ? 'quiet' : 'secondary'}
                             disabled={!canManage || cta.disabled}
+                            data-console-action="select_plan"
                             onClick={() => navigate(generatePath(RoutePath.BILLING_PLAN_CHANGE, { planId: plan.id }))}
                           >
                             {canManage ? cta.label : 'Owner managed'}

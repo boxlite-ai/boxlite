@@ -94,10 +94,7 @@ function App() {
 
   useEffect(() => {
     if (isAuthenticated && user && posthog?.get_distinct_id() !== user.profile.sub) {
-      posthog?.identify(user.profile.sub, {
-        email: user.profile.email,
-        name: user.profile.name,
-      })
+      posthog?.identify(user.profile.sub)
     }
     if (import.meta.env.PROD && config.pylonAppId && isAuthenticated && user) {
       initPylon(config.pylonAppId, {
@@ -111,15 +108,6 @@ function App() {
       })
     }
   }, [isAuthenticated, user, posthog, config.pylonAppId])
-
-  // Hack for tracking PostHog pageviews in SPAs
-  useEffect(() => {
-    if (import.meta.env.PROD) {
-      posthog?.capture('$pageview', {
-        $current_url: window.location.href,
-      })
-    }
-  }, [location, posthog])
 
   if (authError && location.pathname !== RoutePath.LOGOUT) return <LandingPage />
 
@@ -141,10 +129,6 @@ function App() {
       <Route path={RoutePath.REDEEM} element={<Redeem />} />
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />
       <Route path={RoutePath.SLACK} element={<SlackRedirect />} />
-      <Route
-        path={RoutePath.ACCOUNT_SETTINGS}
-        element={<Navigate to={`${RoutePath.BOXES}${location.search}`} replace />}
-      />
       <Route
         path={RoutePath.DASHBOARD}
         element={

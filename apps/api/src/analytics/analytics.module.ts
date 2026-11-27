@@ -7,8 +7,12 @@
 import { Module } from '@nestjs/common'
 import { AnalyticsService } from './services/analytics.service'
 
+import { ConsoleAnalyticsController } from './console-analytics.controller'
+import { AnalyticsConsentService } from './services/analytics-consent.service'
+
 @Module({
-  providers: [AnalyticsService],
+  controllers: [ConsoleAnalyticsController],
+  providers: [AnalyticsService, AnalyticsConsentService],
   exports: [AnalyticsService],
 })
 export class AnalyticsModule {}

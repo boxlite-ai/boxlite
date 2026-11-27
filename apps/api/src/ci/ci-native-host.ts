@@ -28,6 +28,8 @@ import {
   ListenerEvent,
   ScaleSetFailure,
 } from '@boxlite-ai/ci-listener'
+import { v5 } from 'uuid'
+import { recordBusinessEvent } from '../common/utils/business-event.util'
 import { TypedConfigService } from '../config/typed-config.service'
 import { CiGitHubService } from './ci-github.service'
 import { CiNativeState, CiNativeAuthority } from './ci-native-state'
@@ -326,6 +328,7 @@ export class CiNativeHost implements ListenerHost {
     })
   }
   async accept(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'> {
+    let organization: string | undefined
     const captured = {
       ...notification,
       hint: { ...notification.hint, job: notification.hint.job ? { ...notification.hint.job } : null },
@@ -349,11 +352,41 @@ export class CiNativeHost implements ListenerHost {
           if (hint.repositoryId !== 0) {
             if (!row) throw new ForbiddenException('CI installation is not connected')
             await this.store.admit(tx, authority(row), row.app_client_id)
+            organization = row.organization_id
           }
           return work(tx)
         }),
     })
-    return new ListenerInbox(new ListenerState(database, this.store.namespace)).receive(captured)
+    const result = await new ListenerInbox(new ListenerState(database, this.store.namespace)).receive(captured)
+    const { installationId, repositoryId, job } = captured.hint
+    const { jobTiming, observation } = captured
+    if (organization && job && jobTiming && observation) {
+      try {
+        const common = {
+          organizationId: organization,
+          correlationId: v5(`boxlite:ci-request:${installationId}:${repositoryId}:${job.id}`, v5.URL),
+          occurredAt: new Date(jobTiming.occurredAt),
+        }
+        if (observation.status === 'queued') {
+          recordBusinessEvent({ ...common, name: 'cloud.ci.request', outcome: 'requested' })
+        } else {
+          recordBusinessEvent({
+            ...common,
+            name: 'cloud.feature.use',
+            outcome: 'success',
+            feature: {
+              name: 'ci',
+              evidence: observation.status === 'in_progress' ? 'runner_started' : 'runner_completed',
+              source: 'api',
+              ciJobCreatedAt: new Date(jobTiming.createdAt),
+            },
+          })
+        }
+      } catch {
+        this.logger.warn('Could not record CI webhook analytics')
+      }
+    }
+    return result
   }
 
   async close(): Promise<void> {

@@ -250,6 +250,7 @@ describe('CI browser connection lifecycle', () => {
     )
     await render()
     const connect = button('Connect GitHub')
+    expect(connect.getAttribute('data-console-action')).toBe('connect_github')
     await act(async () => connect.click())
     try {
       expect(button('Cancel')).toBeUndefined()

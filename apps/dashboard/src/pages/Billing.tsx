@@ -14,6 +14,7 @@ import { PlanUpgradeReturn } from '@/components/billing/PlanUpgradeReturn'
 import { UsageSection } from '@/components/billing/UsageSection'
 import { WalletSection } from '@/components/billing/WalletSection'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { billingTab } from '@/lib/billing-tab'
 import { RoutePath } from '@/enums/RoutePath'
 import { useConfig } from '@/hooks/useConfig'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
@@ -93,9 +94,7 @@ function Billing() {
   const finishUpgradeReturn = useCallback(() => setPendingUpgrade(null), [])
   // Controlled, so the page-level balance warning can send the user to Wallet.
   const [searchParams, setSearchParams] = useSearchParams()
-  const requestedTab = searchParams.get('tab')
-  const tab =
-    requestedTab && ['overview', 'plans', 'usage', 'wallet'].includes(requestedTab) ? requestedTab : 'overview'
+  const tab = billingTab(searchParams)
   const setTab = (value: string) =>
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous)
@@ -124,19 +123,19 @@ function Billing() {
             </div>
             <div className="mt-5 flex items-center gap-3">
               <TabsList variant="underline" aria-label="Billing views" className="min-w-0 flex-1 gap-3 sm:gap-6">
-                <TabsTrigger value="overview">
+                <TabsTrigger data-console-action="view_billing_overview" value="overview">
                   <TabIcon name="overview" />
                   Overview
                 </TabsTrigger>
-                <TabsTrigger value="plans">
+                <TabsTrigger data-console-action="view_billing_plans" value="plans">
                   <TabIcon name="list" />
                   Plans
                 </TabsTrigger>
-                <TabsTrigger value="usage">
+                <TabsTrigger data-console-action="view_billing_usage" value="usage">
                   <TabIcon name="chart" />
                   Usage
                 </TabsTrigger>
-                <TabsTrigger value="wallet">
+                <TabsTrigger data-console-action="view_billing_wallet" value="wallet">
                   <TabIcon name="wallet" />
                   Wallet
                 </TabsTrigger>

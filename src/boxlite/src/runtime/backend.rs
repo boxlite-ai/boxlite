@@ -195,6 +195,12 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
     /// Read the guest's SSH state without starting the box.
     async fn ssh_status(&self) -> BoxliteResult<SshStatus>;
 
+    async fn ssh_take_usage(&self) -> BoxliteResult<crate::SshUsageBatch> {
+        Err(BoxliteError::Unsupported(
+            "SSH usage requires a local runtime".into(),
+        ))
+    }
+
     /// Stop the guest's SSH listener without starting the box.
     async fn ssh_disable(&self) -> BoxliteResult<SshStatus>;
 }

@@ -10,6 +10,13 @@ struct Control;
 
 #[tonic::async_trait]
 impl Ssh for Control {
+    async fn take_usage(
+        &self,
+        _: Request<boxlite_shared::SshUsageRequest>,
+    ) -> Result<Response<boxlite_shared::SshUsageResponse>, Status> {
+        Ok(Response::new(boxlite_shared::SshUsageResponse::default()))
+    }
+
     async fn control(
         &self,
         _: Request<SshControlRequest>,

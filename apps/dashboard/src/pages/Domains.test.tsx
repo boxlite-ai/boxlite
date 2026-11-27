@@ -5,12 +5,15 @@ import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Domains from './Domains'
+import userEvent from '@testing-library/user-event'
+import { useConsoleAnalytics } from '@/hooks/useConsoleAnalytics'
 import type { DomainList, HeldDomain } from '@/api/domain-types'
 import { MemoryRouter } from 'react-router-dom'
 
 const state = vi.hoisted(() => ({
   organizationId: 'org-1',
   canManage: true,
+  post: vi.fn().mockResolvedValue({}),
   list: vi.fn(),
   claim: vi.fn(),
   custom: vi.fn(),
@@ -19,7 +22,12 @@ const feedback = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), copy: vi.
 vi.mock('sonner', () => ({ toast: { success: feedback.success, error: feedback.error } }))
 vi.mock('@/lib/copy-text', () => ({ copyToClipboard: feedback.copy }))
 vi.mock('@/hooks/useApi', () => ({
-  useApi: () => ({ listDomains: state.list, claimDomain: state.claim, listCustomDomains: state.custom }),
+  useApi: () => ({
+    axiosInstance: { post: state.post },
+    listDomains: state.list,
+    claimDomain: state.claim,
+    listCustomDomains: state.custom,
+  }),
 }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
@@ -27,6 +35,18 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
     authenticatedUserHasPermission: () => state.canManage,
   }),
 }))
+
+vi.mock('@/hooks/useConfig', () => ({
+  useConfig: () => ({ posthog: { host: 'https://events.example', apiKey: 'test' } }),
+}))
+vi.mock('react-oidc-context', () => ({
+  useAuth: () => ({ isAuthenticated: true, user: { profile: { sub: 'member' } } }),
+}))
+
+function TrackedDomains() {
+  useConsoleAnalytics(state.organizationId, new Date(0).toISOString())
+  return <Domains />
+}
 
 const list: DomainList = {
   domains: [
@@ -120,6 +140,7 @@ describe('Domains page', () => {
     )!
   }
   async function openForm() {
+    expect(requestButton().getAttribute('data-console-action')).toBe('new_managed_domain')
     await act(async () => requestButton().click())
     const input = document.querySelector<HTMLInputElement>('#domain-short-name')!
     act(() => {
@@ -159,6 +180,37 @@ describe('Domains page', () => {
     expect(state.custom).toHaveBeenCalledWith('org-1')
     expect(document.querySelector('[role="tabpanel"][data-state="active"]')?.textContent).toContain('Add custom domain')
     expect(state.claim).not.toHaveBeenCalled()
+  })
+
+  it('records each Domains tab selection once by keyboard or mouse', async () => {
+    const user = userEvent.setup()
+    act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={['/dashboard/domains']}>
+            <TrackedDomains />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      ),
+    )
+    await settle()
+    const [managed, custom] = document.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+    await act(async () => {
+      managed.focus()
+      await user.keyboard('{ArrowRight}')
+    })
+    await settle()
+    expect(custom.getAttribute('aria-selected')).toBe('true')
+    await act(async () => {
+      await user.click(managed)
+      await user.click(managed)
+    })
+    expect(managed.getAttribute('aria-selected')).toBe('true')
+    const events = state.post.mock.calls.map(([, event]) => event)
+    expect(events.filter((e) => e.event === 'console_control_click').map((e) => e.action)).toEqual([
+      'view_custom_domains',
+      'view_managed_domains',
+    ])
   })
 
   it('lists full names with Box/port, App, and unbound targets', async () => {

@@ -86,6 +86,7 @@ export function ciWakeHint(event: string, value: unknown): WakeHint | null {
   return { installationId: body.installation.id, accountId: body.installation.account.id, repositoryId: 0, job: null }
 }
 export interface VerifiedWebhook {
+  jobTiming?: { createdAt: string; occurredAt: string }
   observation?: JobObservation
   /** Trusted host provenance; verifyWebhook never reads this field from the body. */
   application?: string
@@ -93,6 +94,27 @@ export interface VerifiedWebhook {
   digest: string
   event: string
   hint: WakeHint
+}
+const utcTimestamp = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) &&
+  Number.isFinite(Date.parse(value))
+
+/** Optional analytics evidence. The inbox accepts other signed job observations for scheduling. */
+function jobTiming(job: Record<string, unknown>, observation: JobObservation): VerifiedWebhook['jobTiming'] {
+  const createdAt = job.created_at
+  if (!utcTimestamp(createdAt)) return undefined
+  if (observation.status === 'queued') return { createdAt, occurredAt: createdAt }
+  if (!observation.runner || typeof job.runner_name !== 'string' || !/^ci-jit-[a-f0-9]{32}$/.test(job.runner_name))
+    return undefined
+  const occurredAt = observation.status === 'in_progress' ? job.started_at : job.completed_at
+  if (!utcTimestamp(occurredAt) || Date.parse(occurredAt) < Date.parse(createdAt)) return undefined
+  try {
+    if (parseResourceLabels(observation.labels)) return { createdAt, occurredAt }
+  } catch {
+    // Conflicting resource labels cannot establish BoxLite usage.
+  }
+  return undefined
 }
 export function verifyWebhook(
   input: { raw: Buffer; signature: string; delivery: string; event: string },
@@ -116,23 +138,22 @@ export function verifyWebhook(
     throw new WebhookError(400, 'Invalid webhook JSON')
   }
   const hint = ciWakeHint(event, value)
-  return hint
-    ? {
-        delivery: input.delivery.toLowerCase(),
-        digest: createHash('sha256').update(raw).digest('hex'),
-        event,
-        hint,
-        ...(event === 'workflow_job'
-          ? {
-              observation: {
-                status: (value as { workflow_job: { status: JobObservation['status'] } }).workflow_job.status,
-                labels: [...(value as { workflow_job: { labels: string[] } }).workflow_job.labels],
-                runner: (value as { workflow_job: { runner_id?: number | null } }).workflow_job.runner_id || null,
-              },
-            }
-          : {}),
-      }
-    : null
+  if (!hint) return null
+  const verified = {
+    delivery: input.delivery.toLowerCase(),
+    digest: createHash('sha256').update(raw).digest('hex'),
+    event,
+    hint,
+  }
+  if (event !== 'workflow_job') return verified
+  // ciWakeHint validated the signed workflow job before this projection.
+  const job = (value as { workflow_job: Record<string, unknown> }).workflow_job
+  const observation: JobObservation = {
+    status: job.status as JobObservation['status'],
+    labels: job.labels as string[],
+    runner: (job.runner_id as number | undefined) || null,
+  }
+  return { ...verified, observation, jobTiming: jobTiming(job, observation) }
 }
 
 /** Both hosts use this inbox. Its database adapter must enforce the live binding in the ingress transaction. */

@@ -104,7 +104,7 @@ help:
 	@echo "    make test:integration:node  - Run Node.js SDK integration tests (requires VM)"
 	@echo "    make test:all:node          - Run all Node.js SDK tests"
 	@echo "    make test:unit:go           - Run Go SDK unit tests"
-	@echo "    make test:integration:go    - Run Go SDK archive round-trip test (requires VM, FILTER=<pattern>)"
+	@echo "    make test:integration:go    - Run Go SDK archive and SSH usage integration tests (requires virtualization, FILTER=<pattern>)"
 	@echo "    make test:integration:runner - Run runner native archive recovery tests (FILTER=<pattern>)"
 	@echo "    make test:all:go            - Run all Go SDK tests"
 	@echo "    make test:unit:c            - Run C SDK unit tests (no VM required)"
@@ -120,6 +120,7 @@ help:
 
 	@echo "    make test:apps:ci-listener  - Run shared CI state contracts (optional local PostgreSQL)"
 	@echo "    make test:apps:github-ci-runner - Run standalone Listener boundary tests"
+	@echo "    make test:apps:feature-usage - Run shared feature reporter tests (FILTER=<pattern>)"
 	@echo "    make test:apps:proxy        - Run proxy unit tests (FILTER=<pattern>)"
 	@echo "    make test:apps:secret-server - Run Secret Server Go tests with the race detector"
 	@echo "    make test:apps:secret-server:integration - Test Secret Server against PostgreSQL (set SECRET_TEST_DATABASE_URL)"

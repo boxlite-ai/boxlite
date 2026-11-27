@@ -39,6 +39,7 @@ describe('MetricsInterceptor inbound mode', () => {
         event: 'api_box_inbound_mode_updated',
         properties: expect.objectContaining({ box_id: 'box-1', box_inbound_mode: mode }),
       }),
+      { users: ['user-1'], organizations: ['org-1'] },
     )
   })
 })

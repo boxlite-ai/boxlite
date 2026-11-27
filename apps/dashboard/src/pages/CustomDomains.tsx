@@ -240,6 +240,7 @@ export default function CustomDomains({
         )}
         <div className="flex-1" />
         <AsciiButton
+          data-console-action="new_custom_domain"
           variant="primary"
           className="h-11 sm:h-9"
           onClick={() => {
@@ -595,6 +596,7 @@ export default function CustomDomains({
                 <AsciiButton
                   variant="primary"
                   type="submit"
+                  data-console-action="create_custom_domain"
                   form="custom-domain-create"
                   disabled={!canCreate || !formHostname.trim() || busy}
                 >
@@ -619,7 +621,12 @@ export default function CustomDomains({
                 ) : (
                   !domain.confirmed &&
                   domain.phase !== 'superseded' && (
-                    <AsciiButton variant="primary" disabled={!canCreate || busy} onClick={() => run('verify')}>
+                    <AsciiButton
+                      variant="primary"
+                      disabled={!canCreate || busy}
+                      data-console-action="verify_custom_domain"
+                      onClick={() => run('verify')}
+                    >
                       {action.isPending
                         ? action.variables?.type === 'verify'
                           ? 'Verifying DNS, please wait…'

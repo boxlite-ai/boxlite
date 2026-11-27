@@ -158,10 +158,14 @@ func (p *Proxy) forwardToGuest(ctx *gin.Context, boxId string, targetPort uint16
 		go p.recordPreviewOpen(activityCtx, boxId)
 	}
 	return &common_proxy.RequestTarget{
-		URL:       target,
-		Host:      forwardedHost,
-		Headers:   headers,
-		Transport: guestCookieTransport{next: p.guestPortTransport},
+		URL:     target,
+		Host:    forwardedHost,
+		Headers: headers,
+		Transport: featureUsageTransport{
+			next:     guestCookieTransport{next: p.guestPortTransport},
+			reporter: p.featureUsage,
+			boxID:    boxId,
+		},
 		ErrorHandler: func(writer http.ResponseWriter, _ *http.Request, err error) {
 			ctx.Error(guestDialFailure(writer.Header(), err))
 		},

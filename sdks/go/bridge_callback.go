@@ -112,22 +112,31 @@ func goBoxliteOnCreateBox(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData u
 
 //export goBoxliteOnBoxExport
 func goBoxliteOnBoxExport(archivePath *C.char, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverOwnedString(archivePath, errPtr, userData)
+}
+
+//export goBoxliteOnSSHUsage
+func goBoxliteOnSSHUsage(json *C.char, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverOwnedString(json, errPtr, userData)
+}
+
+func deliverOwnedString(value *C.char, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
 	if h == 0 {
-		freeBoxliteStringPayload(&archivePath)
+		freeBoxliteStringPayload(&value)
 		return
 	}
-	if !claimOrFreePayload(h, &archivePath, freeBoxliteStringPayload) {
+	if !claimOrFreePayload(h, &value, freeBoxliteStringPayload) {
 		return
 	}
 	defer h.Delete()
 
 	ch, ok := h.Value().(chan handleResult[*C.char])
 	if !ok {
-		freeBoxliteStringPayload(&archivePath)
+		freeBoxliteStringPayload(&value)
 		return
 	}
-	ch <- handleResult[*C.char]{value: archivePath, err: errorFromCError(errPtr)}
+	ch <- handleResult[*C.char]{value: value, err: errorFromCError(errPtr)}
 }
 
 //export goBoxliteOnRuntimeImport
