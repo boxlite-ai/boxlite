@@ -10,6 +10,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { generatePath, useNavigate } from 'react-router-dom'
 import './PlanComparison.css'
 import { subscriptionValue, formatUsageMultiple } from '@/lib/subscription-value'
+import { trialDuration } from '@/lib/trial-offer'
 
 const currency = (cents: number) =>
   new Intl.NumberFormat('en-US', {
@@ -20,25 +21,6 @@ const currency = (cents: number) =>
   }).format(cents / 100)
 const CELL = 'border-b border-border px-4 py-2.5 text-left align-top font-normal'
 const LABEL = `${CELL} sticky left-0 z-10 bg-background text-muted-foreground`
-
-function formatTrialDuration(seconds: number) {
-  const units = [
-    [86400, 'Day', 'd'],
-    [3600, 'Hour', 'h'],
-    [60, 'Minute', 'm'],
-    [1, 'Second', 's'],
-  ] as const
-  const parts: string[] = []
-  let remaining = seconds
-  for (const [size, name, suffix] of units) {
-    const count = Math.floor(remaining / size)
-    if (!count) continue
-    if (count * size === seconds) return `${count} ${name}${count === 1 ? '' : 's'}`
-    parts.push(`${count}${suffix}`)
-    remaining %= size
-  }
-  return parts.join(' ')
-}
 
 function UnspecifiedValue() {
   return (
@@ -91,10 +73,9 @@ export function PlanComparison({
   const custom = <td className={`${CELL} text-muted-foreground`}>By agreement</td>
   const durations = new Map<string, string | null>()
   for (const offer of trialOffers ?? []) {
-    if (offer.eligible === false) durations.set(offer.name, null)
-    else if (offer.eligible === true && Number.isSafeInteger(offer.durationSeconds) && offer.durationSeconds > 0) {
-      durations.set(offer.name, formatTrialDuration(offer.durationSeconds))
-    }
+    const duration = trialDuration(offer)
+    if (duration) durations.set(offer.name, duration)
+    else if (offer.eligible === false) durations.set(offer.name, null)
   }
 
   function trialDetails(name: string) {

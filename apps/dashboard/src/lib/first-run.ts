@@ -1,4 +1,8 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import type { OrganizationPlan, Plan } from '@/billing-api'
+import { LocalStorageKey } from '@/enums/LocalStorageKey'
+import { getLocalStorageItem, setLocalStorageItem } from './local-storage'
+
 const EXPLORING_USE_CASE = {
   id: 'exploring',
   label: 'Just exploring',
@@ -58,4 +62,35 @@ export interface FirstRunWelcome {
   useCase: FirstRunUseCase | null
   note: string
   completedAt?: number | null
+}
+
+export type WelcomeSubscriptionScope = { userId: string; organizationId: string }
+
+export function isPaidSelfServePlan(plan: Plan): plan is Plan & { priceMonthlyCents: number } {
+  return (
+    plan.selfServe &&
+    plan.priceMonthlyCents !== null &&
+    Number.isSafeInteger(plan.priceMonthlyCents) &&
+    plan.priceMonthlyCents > 0
+  )
+}
+
+export function isActivePlan(plan: OrganizationPlan | null, planId: string) {
+  return plan?.planId === planId && plan.status === 'active'
+}
+
+export function recordWelcomeCompletion(userId: string, organizationId: string, welcome?: FirstRunWelcome): number {
+  const key = `boxlite:welcome:${userId}:${organizationId}`
+  const completedAt = Date.now()
+  let saved = welcome
+  if (!saved) {
+    try {
+      saved = JSON.parse(getLocalStorageItem(key) ?? 'null')
+    } catch {
+      /* Invalid progress must not block completion after checkout. */
+    }
+  }
+  setLocalStorageItem(key, JSON.stringify({ ...saved, completedAt }))
+  setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${userId}`, 'true')
+  return completedAt
 }

@@ -1,7 +1,30 @@
 # New-user onboarding
 
-Welcome collects the organization name and use case before offering card setup,
-promo redemption, or direct entry to Quickstart.
+Welcome collects the organization name and use case before offering subscriptions,
+card setup, promo redemption, or direct entry to Quickstart.
+
+## Choosing a subscription
+
+Owners without a live subscription see the self-serve paid plans from Commerce.
+The Console shows the trial duration when Commerce returns a current offer for
+that owner and organization. **Choose** opens the shared Billing confirmation.
+**Subscribe** confirms the displayed monthly fee, charged after an eligible trial
+or at activation when no trial applies.
+
+When a card is needed, Billing opens Commerce's card setup in the same tab.
+On return, Billing checks ownership, the wallet, the current subscription and
+the confirmed monthly price before submitting the subscription once. The same-tab
+handoff is scoped to the owner and organization and expires after 30 minutes.
+The wallet reports whether the organization has a card. Another owner's card
+setup can satisfy that check. If the catalog price has changed or another plan
+has become active, the owner returns to Welcome to choose again. The subscription
+API determines the final price and eligibility when it applies the move.
+
+A redirect from the subscription request leads to a read-only plan check on
+return. Welcome completes and opens Quickstart when Commerce reports the chosen
+plan active. Unconfirmed bank payments remain in Billing for the owner to check.
+The standalone card, promo and exploration options below are available from
+the same Welcome step.
 
 ## Card setup and optional credits
 

@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { useCallback, useEffect, useRef, useState, type Ref } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import { AsciiButton } from '@/components/ascii'
 import { ArrowRightIcon, Check, CreditCardIcon, Loader2 } from '@/components/ui/icon'
 import { useConnectCard } from '@/hooks/useConnectCard'
@@ -53,13 +53,16 @@ export default function WelcomeCreditsStep({
   onContinue,
   useCase,
   illustrationRef,
+  planOptions,
 }: {
   onBack: () => void
   onContinue: () => void
   useCase?: FirstRunUseCase | null
   illustrationRef?: Ref<HTMLDivElement>
+  planOptions?: ReactNode
 }) {
-  const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
+  const { selectedOrganization, organizationMembersStatus, authenticatedUserOrganizationMember } =
+    useSelectedOrganization()
   const isOwner = authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
   const { connectCard, isPending: connecting } = useConnectCard()
   const wallet = useOwnerWalletQuery({
@@ -111,6 +114,11 @@ export default function WelcomeCreditsStep({
       </div>
 
       <div className="border-t border-border pt-7 lg:border-l lg:border-t-0 lg:pl-14 lg:pt-1">
+        {isOwner && organizationMembersStatus === 'ready' && !couponMessage && planOptions && (
+          <fieldset disabled={busy} className="min-w-0">
+            {planOptions}
+          </fieldset>
+        )}
         {!ready && (
           <>
             <h2 className="mt-3 text-em font-medium">Connect your card</h2>

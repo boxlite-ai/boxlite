@@ -8,6 +8,7 @@ export type PendingPlanUpgrade = {
   organizationId: string
   planId: string
   expiresAt: number
+  welcome?: { priceMonthlyCents: number; phase: 'setup' | 'payment' }
 }
 
 export function rememberPlanUpgrade(selection: Omit<PendingPlanUpgrade, 'expiresAt'>) {
@@ -40,7 +41,11 @@ export function readPendingPlanUpgrade(): PendingPlanUpgrade | null {
       typeof value.organizationId === 'string' &&
       typeof value.planId === 'string' &&
       Number.isFinite(value.expiresAt) &&
-      value.expiresAt > Date.now()
+      value.expiresAt > Date.now() &&
+      (value.welcome === undefined ||
+        (Number.isSafeInteger(value.welcome?.priceMonthlyCents) &&
+          value.welcome.priceMonthlyCents > 0 &&
+          (value.welcome.phase === 'setup' || value.welcome.phase === 'payment')))
     ) {
       return value
     }

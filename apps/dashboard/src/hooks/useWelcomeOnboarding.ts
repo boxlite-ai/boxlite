@@ -6,7 +6,7 @@ import { useApi } from './useApi'
 import { useOrganizations } from './useOrganizations'
 import { useSelectedOrganization } from './useSelectedOrganization'
 import { useConfig } from './useConfig'
-import { type FirstRunWelcome, type FirstRunUseCase } from '@/lib/first-run'
+import { recordWelcomeCompletion, type FirstRunWelcome, type FirstRunUseCase } from '@/lib/first-run'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { setLocalStorageItem } from '@/lib/local-storage'
 
@@ -23,10 +23,8 @@ export function useWelcomeOnboarding(initial: FirstRunWelcome) {
   useEffect(() => () => controller.current?.abort(), [organizationId])
   const complete = () => {
     if (!organizationId || !user?.profile.sub) return
-    const completed = { ...welcome, completedAt: Date.now() }
-    setLocalStorageItem(`boxlite:welcome:${user.profile.sub}:${organizationId}`, JSON.stringify(completed))
-    setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${user.profile.sub}`, 'true')
-    setWelcome(completed)
+    const completedAt = recordWelcomeCompletion(user.profile.sub, organizationId, welcome)
+    setWelcome({ ...welcome, completedAt })
   }
   const action = useMutation({
     mutationFn: async (

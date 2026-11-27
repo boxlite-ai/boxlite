@@ -7,20 +7,32 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { BoxliteError } from '@/api/errors'
+import FirstBoxWelcome from '@/components/first-run/FirstBoxWelcome'
 import { RoutePath } from '@/enums/RoutePath'
 import Billing from '../Billing'
 import BillingPlanChange from '../BillingPlanChange'
 
 const api = vi.hoisted(() => ({
+  getOrganizationCheckoutUrl: vi.fn(),
+  getOrganizationOnboarding: vi.fn(),
   getOrganizationPlan: vi.fn(),
   getOrganizationWallet: vi.fn(),
+  getPlanTrialEligibility: vi.fn(),
   getUsagePrices: vi.fn(),
+  listAllPaymentMethods: vi.fn(),
   listPlans: vi.fn(),
   upgradePlan: vi.fn(),
 }))
 const viewer = vi.hoisted(() => ({ organizationId: 'org-1', userId: 'user-1', role: 'owner' }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
-vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ billingApi: api }) }))
+vi.mock('@/hooks/useApi', () => ({
+  useApi: () => ({ billingApi: api, getOrganizationOnboarding: api.getOrganizationOnboarding }),
+}))
+vi.mock('@/hooks/useOrganizations', () => ({ useOrganizations: () => ({ refreshOrganizations: vi.fn() }) }))
+vi.mock('@/components/first-run/FirstBoxAtmosphere', () => ({
+  default: ({ children }: { children: React.ReactNode }) => children,
+}))
+vi.mock('@/components/first-run/WelcomeJourneyArtwork', () => ({ default: () => null }))
 vi.mock('@/hooks/useConfig', () => ({ useConfig: () => ({ billingApiUrl: 'https://billing.example.test' }) }))
 vi.mock('react-oidc-context', () => ({
   useAuth: () => ({ user: { profile: { sub: viewer.userId, email_verified: true } } }),
@@ -55,8 +67,13 @@ beforeEach(() => {
   vi.resetAllMocks()
   Object.assign(viewer, { organizationId: 'org-1', userId: 'user-1', role: 'owner' })
   sessionStorage.clear()
+  localStorage.clear()
+  api.getOrganizationCheckoutUrl.mockResolvedValue(setupUrl)
+  api.getOrganizationOnboarding.mockResolvedValue({ useCase: 'exploring', note: '' })
   api.getOrganizationPlan.mockResolvedValue(null)
   api.getOrganizationWallet.mockResolvedValue(wallet)
+  api.getPlanTrialEligibility.mockResolvedValue([{ name: pro.name, eligible: true, durationSeconds: 259_200 }])
+  api.listAllPaymentMethods.mockResolvedValue([])
   api.listPlans.mockResolvedValue([pro])
   api.getUsagePrices.mockResolvedValue({ schemaVersion: 1, currency: 'USD', prices: [] })
   api.upgradePlan.mockResolvedValueOnce(setupUrl).mockResolvedValue(undefined)
@@ -82,6 +99,7 @@ afterEach(async () => {
   await unmount()
   host.remove()
   sessionStorage.clear()
+  localStorage.clear()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -100,6 +118,8 @@ async function visit(path: string) {
             <Routes>
               <Route path={RoutePath.BILLING_PLAN_CHANGE} element={<BillingPlanChange />} />
               <Route path={RoutePath.BILLING} element={<Billing />} />
+              <Route path={RoutePath.WELCOME} element={<FirstBoxWelcome />} />
+              <Route path={RoutePath.QUICKSTART} element={<h1>Quickstart</h1>} />
             </Routes>
           </MemoryRouter>
         </QueryClientProvider>
@@ -263,4 +283,139 @@ it('opens ordinary Billing with a connected card without submitting an upgrade',
   connectCard()
   await returnToBilling()
   expect(api.upgradePlan).not.toHaveBeenCalled()
+})
+
+const welcomeProgressKey = 'boxlite:welcome:user-1:org-1'
+
+async function chooseWelcomePlan() {
+  await visit(RoutePath.WELCOME)
+  const choose = () => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Choose Pro')
+  await eventually(() => {
+    expect(choose()).toBeDefined()
+    expect(host.textContent).toContain('3 days free')
+  })
+  await act(async () => choose()!.click())
+  await eventually(() => expect(host.querySelector('h1')?.textContent).toBe('Subscribe'))
+  expect(api.getOrganizationCheckoutUrl).not.toHaveBeenCalled()
+  expect(api.upgradePlan).not.toHaveBeenCalled()
+}
+
+async function subscribeFromWelcome() {
+  const subscribe = () => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Subscribe')
+  await eventually(() => expect(subscribe()?.disabled).toBe(false))
+  await act(async () => subscribe()!.click())
+}
+
+function activatePlan(status: 'active' | 'past_due' = 'active') {
+  api.getOrganizationPlan.mockResolvedValue({
+    planId: pro.id,
+    planName: pro.name,
+    status,
+    cycleFrom: new Date('2026-11-01'),
+    cycleTo: new Date('2026-12-01'),
+    includedQuotaCents: pro.includedQuotaCents,
+    quotaConsumedCents: 0,
+    quotaRemainingCents: pro.includedQuotaCents,
+  })
+}
+
+async function expectWelcomeCompleted() {
+  await eventually(() => expect(host.querySelector('h1')?.textContent).toBe('Quickstart'))
+  expect(JSON.parse(localStorage.getItem(welcomeProgressKey)!)).toMatchObject({ completedAt: expect.any(Number) })
+}
+
+it('Welcome subscription confirms the paid terms before card setup and submits exactly once after verification', async () => {
+  api.listPlans.mockResolvedValue([{ ...pro, priceMonthlyCents: 14_925 }])
+  api.upgradePlan.mockReset().mockImplementation(async () => {
+    activatePlan()
+  })
+  await chooseWelcomePlan()
+  await eventually(() => expect(host.textContent).toContain('$149.25 at activation if a trial does not apply'))
+  await subscribeFromWelcome()
+  await eventually(() => expect(location.href).toBe(setupUrl))
+  expect(api.getOrganizationCheckoutUrl).toHaveBeenCalledExactlyOnceWith('org-1')
+  expect(api.upgradePlan).not.toHaveBeenCalled()
+  expect(localStorage.getItem(welcomeProgressKey)).toBeNull()
+
+  connectCard()
+  await visit(RoutePath.BILLING)
+  await expectWelcomeCompleted()
+  await returnToBilling()
+  expect(api.upgradePlan).toHaveBeenCalledExactlyOnceWith('org-1', pro.id)
+})
+
+it('Welcome subscription with a saved card completes after the immediate subscription succeeds', async () => {
+  connectCard()
+  api.upgradePlan.mockReset().mockImplementation(async () => {
+    activatePlan()
+  })
+  await chooseWelcomePlan()
+  await subscribeFromWelcome()
+  await expectWelcomeCompleted()
+  expect(api.upgradePlan).toHaveBeenCalledExactlyOnceWith('org-1', pro.id)
+  expect(api.getOrganizationCheckoutUrl).not.toHaveBeenCalled()
+})
+
+it.each([true, false])(
+  'Welcome subscription checks bank authentication without resubmitting, cardless=%s',
+  async (cardless) => {
+    const opaqueUrl = 'https://checkout.stripe.com/c/pay/opaque_return'
+    api.getOrganizationCheckoutUrl.mockResolvedValue(opaqueUrl)
+    api.upgradePlan.mockReset().mockResolvedValue(opaqueUrl)
+    if (!cardless) connectCard()
+    await chooseWelcomePlan()
+    await subscribeFromWelcome()
+    await eventually(() => expect(location.href).toBe(opaqueUrl))
+    if (cardless) {
+      expect(api.upgradePlan).not.toHaveBeenCalled()
+      connectCard()
+      await visit(RoutePath.BILLING)
+      await eventually(() => expect(location.href).toBe(opaqueUrl))
+    }
+    expect(localStorage.getItem(welcomeProgressKey)).toBeNull()
+    activatePlan()
+    await visit(RoutePath.BILLING)
+    await expectWelcomeCompleted()
+    expect(api.upgradePlan).toHaveBeenCalledExactlyOnceWith('org-1', pro.id)
+  },
+)
+
+it.each(['price change', 'canceled card setup', 'different plan'])(
+  'Welcome subscription abandons the handoff after %s',
+  async (reason) => {
+    await chooseWelcomePlan()
+    await subscribeFromWelcome()
+    await eventually(() => expect(location.href).toBe(setupUrl))
+    if (reason !== 'canceled card setup') connectCard()
+    if (reason === 'price change') api.listPlans.mockResolvedValue([{ ...pro, priceMonthlyCents: 15_000 }])
+    if (reason === 'different plan') api.getOrganizationPlan.mockResolvedValue({ planId: 'another', status: 'active' })
+    await visit(RoutePath.BILLING)
+    await eventually(() => expect(host.querySelector('[aria-label="Onboarding progress"]')).not.toBeNull(), 5_000)
+    expect(api.upgradePlan).not.toHaveBeenCalled()
+    expect(localStorage.getItem(welcomeProgressKey)).toBeNull()
+  },
+)
+
+it('Welcome subscription leaves a payment that is still past due in Billing', async () => {
+  connectCard()
+  api.upgradePlan.mockReset().mockResolvedValue(authenticationUrl)
+  await chooseWelcomePlan()
+  await subscribeFromWelcome()
+  await eventually(() => expect(location.href).toBe(authenticationUrl))
+  activatePlan('past_due')
+  await returnToBilling()
+  expect(api.upgradePlan).toHaveBeenCalledExactlyOnceWith('org-1', pro.id)
+  expect(localStorage.getItem(welcomeProgressKey)).toBeNull()
+})
+
+it('Welcome subscription does not continue if the organization changed during setup', async () => {
+  await chooseWelcomePlan()
+  await subscribeFromWelcome()
+  await eventually(() => expect(location.href).toBe(setupUrl))
+  connectCard()
+  viewer.organizationId = 'org-2'
+  await returnToBilling()
+  expect(api.upgradePlan).not.toHaveBeenCalled()
+  expect(localStorage.getItem(welcomeProgressKey)).toBeNull()
+  expect(localStorage.getItem('boxlite:welcome:user-1:org-2')).toBeNull()
 })

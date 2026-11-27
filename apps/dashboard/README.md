@@ -734,8 +734,8 @@ ID as a confirmed selection. See [Organization context](#organization-context).
 
 ## New-user onboarding
 
-The welcome flow saves organization intent, then offers card setup, promo redemption,
-or direct entry to Quickstart.
+The welcome flow saves organization intent, then offers live subscriptions through
+Billing, card setup, promo redemption, or direct entry to Quickstart.
 [Onboarding](onboarding.md) describes the dedicated Quickstart page, public image templates,
 server-backed prompt drafts, completion state, and deployment requirements.
 
@@ -1584,7 +1584,7 @@ three options disabled, and other existing fixtures exercise missing fields.
 
 Run the mock Dashboard and open `/dashboard/welcome?preview=trial-onboarding`. The entry starts at organization naming, continues through the existing use-case selection, then offers Starter/Team selection, simulated card verification, explicit activation confirmation and immediate navigation to the existing Quickstart. Add `&step=plans` to inspect the third step directly. Returning from plan choice preserves the use-case selection. Use `&scenario=ineligible` or `&scenario=unavailable` to review alternative fixtures; the default is eligible. Product UI contains no preview tooling or simulation labels. Refresh resets the prototype.
 
-This entry requires development mode and `VITE_ENABLE_MOCKING=true`; the prototype module is excluded from production builds. It never invokes payment APIs or writes simulated subscription results to the Billing cache. Prices and plan concurrency reuse the current presentation source; no trial quota is inferred from bonus credits. Shipping this flow needs a server-confirmed eligibility/price quote and a mutation that rejects eligibility changes instead of silently charging. Registration/authentication and default Welcome remain unchanged.
+This entry requires development mode and `VITE_ENABLE_MOCKING=true`. The prototype module is excluded from production builds. It never invokes payment APIs or writes simulated subscription results to the Billing cache. Prices and plan concurrency reuse the prototype's presentation data. The production flow uses [Billing confirmation before card setup](onboarding.md#choosing-a-subscription).
 
 The choice step also offers “Explore console — no card required”, completing Welcome without verifying a card or activating a plan. “Have a coupon? Redeem code” expands an independent form: use `ACME50` for simulated success, an empty code for required-field feedback, or another code for invalid/expired feedback. Successful trial confirmation and coupon redemption complete Welcome immediately and enter Quickstart, without a separate success screen or another click. Coupon balances are not persisted to the shared mock wallet. Both alternative paths use existing Welcome completion and lead to Quickstart.
 
