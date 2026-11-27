@@ -63,5 +63,7 @@ describe('Admin API error contract', () => {
     const body = json.mock.calls[0][0]
     expect(validate(body)).toBe(true)
     expect(validate({ error: { message: body.error.message } })).toBe(false)
+    // Hosted Box APIs send a flat error; Admin clients never receive that shape.
+    expect(validate({ statusCode: status, error: 'Conflict', message: body.error.message })).toBe(false)
   })
 })

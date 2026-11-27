@@ -225,6 +225,8 @@ paths:
       summary: Create a managed persistent volume
       description: Creates a volume and waits until its backing object storage is ready.
       tags: [Volumes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: false
         content:
@@ -242,6 +244,10 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "408":
           $ref: "#/components/responses/RequestTimeoutError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
           $ref: "#/components/responses/ServiceUnavailableError"
 
@@ -281,6 +287,7 @@ paths:
       summary: Remove a managed persistent volume
       tags: [Volumes]
       parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
         - name: force
           in: query
           description: Treat an already deleting or missing volume as successfully removed
@@ -294,6 +301,12 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Boxes
@@ -440,10 +453,16 @@ paths:
       responses:
         "204":
           description: Box removed
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Box Lifecycle
@@ -469,10 +488,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/stop:
     parameters:
@@ -499,10 +524,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/ssh/enable:
     parameters:
@@ -517,6 +548,8 @@ paths:
         Never starts or resumes the box or its main command, and does not count
         as activity. Requires write:boxes permission on hosted servers.
       tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "200":
           description: SSH enabled or already enabled
@@ -530,6 +563,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
           $ref: "#/components/responses/ServiceUnavailableError"
 
@@ -542,7 +577,8 @@ paths:
       summary: Configure guest SSH
       description: |
         Replaces the guest's complete SSH configuration; every accepted call
-        fully restarts the listener, so it must not be retried automatically.
+        fully restarts the listener. Retry only with the same key and input on
+        a hosted deployment advertising configureSsh in idempotency_operations.
         May start a `configured` or resume a `stopped` box on the image's
         default command; in those two states an explicit `cmd`/`entrypoint`
         requires a prior start (a running box with an explicit command is
@@ -550,6 +586,8 @@ paths:
         invalid configuration is rejected without changing the listener
         already running.
       tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -569,6 +607,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
           $ref: "#/components/responses/ServiceUnavailableError"
     get:
@@ -602,6 +642,8 @@ paths:
         saved SSH intent. Never starts or resumes the VM or its main command,
         and does not count as activity.
       tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "200":
           description: SSH disabled or already disabled on a running box
@@ -609,10 +651,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SshStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
           $ref: "#/components/responses/ServiceUnavailableError"
 
@@ -859,6 +905,10 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/executions:
     parameters:
@@ -925,11 +975,21 @@ paths:
         client observes an `{"type":"exit","exit_code":...}` text frame
         followed by a normal close.
       tags: [Execution]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "204":
           description: Execution killed and evicted.
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/attach:
     parameters:
@@ -1093,10 +1153,16 @@ paths:
       responses:
         "204":
           description: Signal sent
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/executions/{exec_id}/resize:
     parameters:
@@ -1110,6 +1176,8 @@ paths:
         Resizes the pseudo-terminal for a TTY-enabled execution.
         Only applicable to executions started with `tty: true`.
       tags: [Execution]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1119,10 +1187,16 @@ paths:
       responses:
         "204":
           description: TTY resized
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Files
@@ -1314,6 +1388,7 @@ paths:
         while the port is revoked and serves again once it is reopened.
       tags: [Network]
       parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
         - name: port
           in: query
           required: true
@@ -1330,6 +1405,12 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/network/inbound:
     parameters:
@@ -1349,6 +1430,8 @@ paths:
         Servers that support this advertise
         `capabilities.inbound_update_enabled` in `GET /config`.
       tags: [Network]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1368,6 +1451,10 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/network/outbound:
     parameters:
@@ -1390,6 +1477,8 @@ paths:
         rollback can leave live and stored policy different; retry the full
         replacement. GET box reports the last persisted policy.
       tags: [Network]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1409,12 +1498,16 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
         "500":
           description: Application or persistence failed; retry the complete policy
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/agents:
     parameters:
@@ -1719,6 +1812,8 @@ paths:
         Error codes: `platform_domain_not_configured`, `subdomain_too_short`,
         `domain_count_limit_reached` (400), `subdomain_taken` (409).
       tags: [Domains]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1745,6 +1840,10 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/domains/{domain}/target:
     parameters:
@@ -1779,6 +1878,8 @@ paths:
         Custom-domain errors: `subscription_required` (403),
         `subscription_not_ready` and `domain_not_ready` (409).
       tags: [Domains]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1804,6 +1905,10 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
     delete:
       operationId: unbindDomain
       summary: Stop routing a domain
@@ -1817,6 +1922,8 @@ paths:
         The port's own URL stays public until revokeTunnel.
         Safe to repeat for an owned name; a name not owned by the caller is 404.
       tags: [Domains]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "204":
           description: The domain routes nowhere
@@ -1824,6 +1931,12 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Metrics
@@ -1933,6 +2046,8 @@ paths:
         returns creating and becomes ready after upload succeeds. A 201
         response accepting `full` includes `kind: "full"` even while creating.
       tags: [Checkpoints]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1952,6 +2067,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
           $ref: "#/components/responses/ServiceUnavailableError"
     get:
@@ -2003,6 +2120,7 @@ paths:
         retains deleting state and quota until a successful retry.
       tags: [Checkpoints]
       parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
         - name: force
           in: query
           description: Ignore absence only; never bypass active use
@@ -2018,6 +2136,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
           $ref: "#/components/responses/ServiceUnavailableError"
 
@@ -2049,6 +2169,8 @@ paths:
         A server refuses with `InvalidStateError` while a box can still boot
         from the image.
       tags: [Images]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "204":
           description: The image is no longer held
@@ -2058,6 +2180,10 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/images/{image_name}/aliases:
     parameters:
@@ -2073,6 +2199,8 @@ paths:
         existing boxes are unchanged, and nothing is pulled. A local runtime
         without a catalog answers UnsupportedError.
       tags: [Images]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -2092,6 +2220,10 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/images/{image_name}/aliases/{alias}:
     parameters:
@@ -2106,6 +2238,8 @@ paths:
         upstream registry and existing boxes remain unchanged. An absent image
         or alias answers NotFoundError. Local runtimes answer UnsupportedError.
       tags: [Images]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "204":
           description: The alias was deleted
@@ -2113,6 +2247,12 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Registries
@@ -2145,6 +2285,8 @@ paths:
         for the same pair is refused with `AlreadyExistsError`. A server that
         cannot pull private images answers `UnsupportedError`.
       tags: [Registries]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -2161,7 +2303,7 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequestError"
         "409":
-          description: A login is already held for this registry and prefix
+          description: A login is already held for this registry and prefix, or a hosted key has different input (idempotency_request_mismatch) or is still in progress (idempotency_in_progress).
           content:
             application/json:
               schema:
@@ -2171,12 +2313,16 @@ paths:
                   message: "A credential for ghcr.io/acme/ already exists; remove it before adding another"
                   type: AlreadyExistsError
                   code: already_exists
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
         "501":
           description: This server does not pull private images
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/images/registries/{registry_id}:
     parameters:
@@ -2191,6 +2337,8 @@ paths:
         `InvalidStateError`, naming the boxes, while a box still pulls through
         the login.
       tags: [Registries]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "204":
           description: The login is gone, and its password destroyed
@@ -2200,6 +2348,10 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
 # ===========================================================================
 # Components
@@ -2390,11 +2542,17 @@ components:
       name: Idempotency-Key
       in: header
       description: |
-        Optional client-provided UUID for safe request retries.
-        If the server has already processed a request with this key,
-        it returns the original response without re-executing.
-        Same key with different payload returns 422.
-        Keys expire after the duration advertised in `GET /v1/config`.
+        Optional client-provided UUID. Hosted deployments advertising this
+        operation in capabilities.idempotency_operations replay the original
+        successful status, body, Content-Type and Location for the same caller,
+        key and business input. Retention is PT24H from first use, without extension.
+        Concurrent attempts return 409 idempotency_in_progress; changed input
+        returns 409 idempotency_request_mismatch; an uncertain outcome returns
+        422 idempotency_outcome_unknown and must not be automatically dispatched
+        again using a new key. Missing, expired or lost records end the guarantee.
+        Omission preserves the operation's ordinary behavior and sends no header.
+        This header does not declare support in boxlite serve or the reference
+        server; inspect GET /v1/config on the target deployment first.
       schema:
         type: string
         format: uuid
@@ -2462,7 +2620,7 @@ components:
               value: {error: {message: "agent unavailable", type: UpstreamUnavailableError, code: upstream_unavailable, request_id: req_1}}
 
     BadRequestError:
-      description: Invalid request parameters or body
+      description: Invalid request parameters or body, including malformed or duplicate Idempotency-Key headers and non-JSON keyed request bodies on hosted writes.
       content:
         application/json:
           schema:
@@ -2501,7 +2659,7 @@ components:
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     ConflictError:
-      description: Resource state conflict
+      description: Resource state conflict. Hosted keyed writes return idempotency_request_mismatch for changed input or idempotency_in_progress while the original request is running.
       content:
         application/json:
           schema:
@@ -2514,7 +2672,7 @@ components:
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     UnprocessableEntityError:
-      description: Request understood but cannot be processed
+      description: Request understood but cannot be processed. Hosted keyed writes return idempotency_outcome_unknown when the original outcome cannot be confirmed.
       content:
         application/json:
           schema:
@@ -2548,7 +2706,7 @@ components:
             code: resource_exhausted
 
     ServiceUnavailableError:
-      description: A required backend service is not configured or available
+      description: A required backend service is not configured or available. Hosted keyed writes return idempotency_storage_unavailable if reserving the key fails before dispatch.
       headers:
         Retry-After:
           description: Seconds to wait when Box creation admission is temporarily contended
@@ -2892,8 +3050,14 @@ components:
               example: true
             idempotency_key_lifetime:
               type: string
-              description: How long idempotency keys are retained (ISO 8601 duration)
+              description: Retention from first use (ISO 8601 duration); hosted request replay advertises PT24H
               example: PT24H
+            idempotency_operations:
+              type: array
+              description: Hosted operationIds generated from registered routes and the replay policy; absent means no advertised support
+              items:
+                type: string
+              example: [createBox, startExecution, configureSsh]
 
     # =======================================================================
     # Authentication
@@ -2974,7 +3138,13 @@ components:
       required: [error]
       properties:
         error:
-          $ref: "#/components/schemas/ErrorModel"
+          oneOf:
+            - $ref: "#/components/schemas/ErrorModel"
+            - type: string
+        message: {type: string}
+        code:
+          type: string
+          description: Machine-readable reason returned by hosted APIs.
 
     ErrorModel:
       type: object

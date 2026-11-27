@@ -31,6 +31,88 @@ const COLD_PULL_WINDOW_ENV = 'BOXLITE_IMAGE_COLD_PULL_WINDOW_SECONDS'
 const DEFAULT_COLD_PULL_WINDOW_SECONDS = 60
 
 /**
+ * The ticket a cold-pull spend hands back, and a refund must present.
+ *
+ * `generation` names the exact window the charge landed in — the value the
+ * charge wrote to the window's generation key, which expires with the window.
+ * A refund whose ticket names a window that is gone, or has been replaced by
+ * a newer generation, is refused: it must never discount a window it did not
+ * pay for. `spent` is one charged cold pull, independently of the window's
+ * cumulative count, so a refund returns only this call's charge.
+ */
+export interface ColdPullTicket {
+  generation: string
+  spent: number
+}
+
+/**
+ * Charge one cold pull and stamp the window's generation, atomically.
+ *
+ * The counter and its generation stamp live and expire together; the
+ * generation source — a plain never-expiring counter — does not. Each window
+ * rebuild takes the next number, so generations never repeat for one
+ * organization and a refund can tell the window it paid for from any later
+ * one, even one that starts with the same count. When the limit is crossed,
+ * the last over-limit calls stay counted — the window refuses further work
+ * either way, and its TTL, which the error reports, still reads true.
+ *
+ * Time       window 1                 window 2
+ * spend A    +1, ticket generation 1
+ * expiry     counter and stamp end
+ * spend B                             +1, ticket generation 2
+ * refund A                            generation mismatch; count stays 1
+ *
+ * KEYS[1] counter, KEYS[2] generation stamp, KEYS[3] generation sequence.
+ * ARGV[1] window seconds, ARGV[2] limit.
+ * Returns { new count, generation, counter pttl }.
+ */
+const COLD_PULL_SPEND_SCRIPT = `
+local newWindow = redis.call('EXISTS', KEYS[1]) == 0
+local count = redis.call('INCR', KEYS[1])
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+  ttl = redis.call('PTTL', KEYS[1])
+end
+if newWindow or redis.call('EXISTS', KEYS[2]) == 0 then
+  local generation = redis.call('INCR', KEYS[3])
+  redis.call('SET', KEYS[2], generation)
+end
+redis.call('PEXPIRE', KEYS[2], ttl)
+return {count, redis.call('GET', KEYS[2]), ttl}
+`
+
+/**
+ * Give back exactly the units a spend charged, but only to the window the
+ * spend paid for.
+ *
+ * The refund runs only when the generation key still holds the ticket's
+ * generation — the same window, unexpired, unreplaced. It also floors the
+ * counter at zero, so a manual trim of the counter cannot be driven negative
+ * by a refund for charges that are already gone. If the generation has moved
+ * on or expired, the refund is a no-op: the charge died with its window.
+ *
+ * KEYS[1] counter, KEYS[2] generation; ARGV[1] ticket generation,
+ * ARGV[2] charged count. Returns the new counter value, or the old one when
+ * the ticket does not match.
+ */
+const COLD_PULL_REFUND_SCRIPT = `
+if redis.call('GET', KEYS[2]) ~= ARGV[1] then
+  return redis.call('GET', KEYS[1]) or 0
+end
+local count = redis.call('GET', KEYS[1])
+if not count then
+  return 0
+end
+count = tonumber(count) - tonumber(ARGV[2])
+if count < 0 then
+  count = 0
+end
+redis.call('SET', KEYS[1], count, 'KEEPTTL')
+return count
+`
+
+/**
  * A positive integer from the environment, or `fallback` when it is unset.
  * Anything else stops the API at boot: a limit an operator mistyped must not
  * quietly become the default, or no limit at all.
@@ -138,12 +220,66 @@ export class ImageAdmissionService {
    * taking its answer as the argument puts this after the resolver. Running
    * `assert` first, so a refused image never reaches the catalog query, is the
    * caller's to keep.
+   *
+   * Returns the ticket naming the window generation and the count this call
+   * spent. The increment and the generation write are one atomic step: a
+   * refund holding an older ticket must never be able to race a fresh window
+   * into existence, or it would discount a window it never paid for.
    */
-  async spendColdPullBudget(organization: Organization, resolved: ResolvedImage): Promise<void> {
+  async spendColdPullBudget(organization: Organization, resolved: ResolvedImage): Promise<ColdPullTicket | undefined> {
+    if (!resolved.isOrgOwned || resolved.imageId) {
+      return undefined
+    }
+    const key = `image:coldpull:${organization.id}`
+    const [count, generation, pttl] = (await this.redis.eval(
+      COLD_PULL_SPEND_SCRIPT,
+      3,
+      key,
+      `${key}:gen`,
+      `${key}:genseq`,
+      this.coldPullWindowSeconds,
+      this.coldPullLimit,
+    )) as [number, string, number]
+
+    if (count > this.coldPullLimit) {
+      // A key that somehow lost its TTL would block the organization forever;
+      // the script restores the expiry, and the answer reports a full window.
+      const retryAfterSeconds = pttl >= 0 ? Math.ceil(pttl / 1000) : this.coldPullWindowSeconds
+      throw new ImageColdPullRateLimitedError(this.coldPullLimit, this.coldPullWindowSeconds, retryAfterSeconds)
+    }
+    return { generation, spent: 1 }
+  }
+
+  /**
+   * Hand one spent cold pull back, for a create whose only effect was that
+   * spend: the box limit settles inside the insert, after the budget, and the
+   * replay layer treats that rejection as retryable — without the refund,
+   * automatic retries would drain the organization's window without a box to
+   * show for it.
+   *
+   * The ticket names the window generation charged. A refund only counts down
+   * the same generation: when the window has expired and a newer one replaced
+   * it, the ticket no longer matches and the newer window keeps its count, so
+   * a late refund cannot discount pulls it never paid for. An expired window
+   * is never resurrected either: with no generation left there is nothing to
+   * match against and the refund is a no-op.
+   */
+  async refundColdPullBudget(
+    organization: Organization,
+    resolved: ResolvedImage,
+    ticket: ColdPullTicket,
+  ): Promise<void> {
     if (!resolved.isOrgOwned || resolved.imageId) {
       return
     }
-    await this.assertPullBudget(organization)
+    await this.redis.eval(
+      COLD_PULL_REFUND_SCRIPT,
+      2,
+      `image:coldpull:${organization.id}`,
+      `image:coldpull:${organization.id}:gen`,
+      ticket.generation,
+      ticket.spent,
+    )
   }
 
   /**
@@ -168,28 +304,6 @@ export class ImageAdmissionService {
     })
     if (held >= organization.imageCountLimit) {
       throw new ImageCountLimitReachedError(organization.imageCountLimit)
-    }
-  }
-
-  private async assertPullBudget(organization: Organization): Promise<void> {
-    const key = `image:coldpull:${organization.id}`
-    const started = await this.redis.incr(key)
-    if (started === 1) {
-      await this.redis.expire(key, this.coldPullWindowSeconds)
-    }
-    if (started > this.coldPullLimit) {
-      // A key that somehow lost its TTL would block the organization forever,
-      // so read the remaining time rather than assuming a full window, and
-      // restore the expiry when it is missing.
-      const ttl = await this.redis.ttl(key)
-      if (ttl < 0) {
-        await this.redis.expire(key, this.coldPullWindowSeconds)
-      }
-      throw new ImageColdPullRateLimitedError(
-        this.coldPullLimit,
-        this.coldPullWindowSeconds,
-        ttl > 0 ? ttl : this.coldPullWindowSeconds,
-      )
     }
   }
 }

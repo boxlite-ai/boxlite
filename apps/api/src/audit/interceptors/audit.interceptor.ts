@@ -116,7 +116,11 @@ export class AuditInterceptor implements NestInterceptor {
         const result = await firstValueFrom(next.handle())
 
         const organizationId = this.resolveOrganizationId(auditContext, request, result)
-        const targetId = this.resolveTargetId(auditContext, request, result)
+        if (!request[AUDIT_TARGET_ID] && auditContext.targetIdFromResult && result) {
+          const resultTargetId = this.normalizeTargetId(auditContext.targetIdFromResult(result))
+          if (resultTargetId) request[AUDIT_TARGET_ID] = resultTargetId
+        }
+        const targetId = this.resolveTargetId(auditContext, request)
         const statusCode = response.statusCode || HttpStatus.NO_CONTENT
         if (!completeResponse) await this.recordHandlerSuccess(auditLog, organizationId, targetId, statusCode)
 
@@ -215,16 +219,10 @@ export class AuditInterceptor implements NestInterceptor {
   /**
    * Resolves the identifier of the target resource from the initial request or the response object.
    *
-   * Prioritizes resolving the ID from the response object as the request may not include a unique resource identifier (e.g. delete box by name).
+   * A resource ID resolved by the handler or its result takes precedence over the request target.
    */
-  private resolveTargetId(auditContext: AuditContext, request: RequestWithUser, result?: any): string | null {
+  private resolveTargetId(auditContext: AuditContext, request: RequestWithUser): string | null {
     if (request[AUDIT_TARGET_ID]) return request[AUDIT_TARGET_ID]
-    if (auditContext.targetIdFromResult && result) {
-      const targetId = this.normalizeTargetId(auditContext.targetIdFromResult(result))
-      if (targetId) {
-        return targetId
-      }
-    }
 
     if (auditContext.targetIdFromRequest) {
       const targetId = this.normalizeTargetId(auditContext.targetIdFromRequest(request))

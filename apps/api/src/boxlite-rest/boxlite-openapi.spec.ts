@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ArgumentsHost, HttpException } from '@nestjs/common'
 import Ajv2020 from 'ajv/dist/2020'
 import addFormats from 'ajv-formats'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parse } from 'yaml'
+import { AllExceptionsFilter } from '../filters/all-exceptions.filter'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { RegistriesService } from '../registry/services/registries.service'
 import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
@@ -21,7 +23,7 @@ const spec = parse(readFileSync(resolve(__dirname, '../../../../openapi/box.open
 // standard JSON Schema semantics required by this OAS 3.1 document.
 const jsonSchema = JSON.parse(JSON.stringify(spec, (key, value) => (key === 'nullable' ? undefined : value)))
 const ajv = addFormats(new Ajv2020({ strict: false, allErrors: true }))
-ajv.addSchema({ components: jsonSchema.components }, 'box-api')
+ajv.addSchema({ components: jsonSchema.components, paths: jsonSchema.paths }, 'box-api')
 
 function validator(name: string) {
   const validate = ajv.getSchema(`box-api#/components/schemas/${name}`)
@@ -261,4 +263,47 @@ describe('Box API JSON Schema nullability', () => {
       expect(validate(missing)).toBe(false)
     },
   )
+})
+
+describe('Hosted replay error contract', () => {
+  type Operation = {
+    operationId: string
+    parameters?: { $ref?: string }[]
+    responses: Record<string, { $ref?: string }>
+  }
+  const writes = Object.entries(spec.paths).flatMap(([path, item]) =>
+    Object.entries(item as Record<string, Operation>)
+      .filter(([, op]) => op.parameters?.some((p) => p.$ref === '#/components/parameters/idempotencyKey'))
+      .map(([method, op]) => ({ path, method, op })),
+  )
+
+  it.each([
+    [400, undefined],
+    [409, 'idempotency_in_progress'],
+    [409, 'idempotency_request_mismatch'],
+    [422, 'idempotency_outcome_unknown'],
+    [503, 'idempotency_storage_unavailable'],
+  ] as const)('documents the hosted %i response (%s) for every keyed write', async (status, code) => {
+    const json = jest.fn()
+    const url = '/api/v1/volumes'
+    const host = {
+      switchToHttp: () => ({
+        getRequest: () => ({ path: url, url }),
+        getResponse: () => ({ status: () => ({ json }) }),
+      }),
+    } as ArgumentsHost
+    const filter = new AllExceptionsFilter({} as never)
+    await filter.catch(new HttpException({ message: 'Request refused', code }, status), host)
+    const [body] = json.mock.calls[0]
+
+    expect(writes.map(({ op }) => op.operationId)).toContain('createVolume')
+    for (const { path, method, op } of writes) {
+      const escapedPath = path.replace(/~/g, '~0').replace(/\//g, '~1')
+      const ref = op.responses[status]?.$ref ?? `#/paths/${escapedPath}/${method}/responses/${status}`
+      const validate = ajv.getSchema(`box-api${ref}/content/application~1json/schema`)
+      if (!validate) throw new Error(`${op.operationId} has no response schema for ${status}`)
+      if (!validate(body)) throw new Error(`${op.operationId} ${status}: ${ajv.errorsText(validate.errors)}`)
+      expect(validate({ ...body, code: 123 })).toBe(false)
+    }
+  })
 })

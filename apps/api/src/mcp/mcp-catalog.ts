@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { replayPolicy } from '../boxlite-rest/request-replay-policy'
+
 /** A JSON Schema object, as OpenAPI 3.x and MCP tool inputs carry it. */
 export type JsonSchema = Record<string, unknown>
 
@@ -95,7 +97,7 @@ export class McpCatalog {
   }
 
   private addDocument(doc: OpenApiDocument, toRoute: (path: string) => string, admit: (id: string) => boolean): void {
-    const resolve = refResolver(doc)
+    const resolve = refResolver(doc, { 'box.openapi.yaml': this.sources.box, 'admin.openapi.yaml': this.sources.admin })
     for (const [path, item] of Object.entries((doc.paths ?? {}) as Record<string, Record<string, unknown>>)) {
       const shared = asArray(item.parameters)
       for (const method of METHODS) {
@@ -124,15 +126,26 @@ function toOperation(
   const properties: Record<string, JsonSchema> = {}
   const required: string[] = []
   const params: McpOperationParam[] = []
+  const responses = (operation.responses ?? {}) as Record<string, unknown>
+  const supportsReplay = replayPolicy(method, path, '101' in responses) === 'supported'
   for (const raw of [...sharedParams, ...asArray(operation.parameters)]) {
     const param = resolve(raw) as Record<string, unknown>
     const name = param.name as string
     const location = param.in as McpOperationParam['in']
     if (name === 'prefix' || !['path', 'query', 'header'].includes(location)) continue
     if (location === 'header' && RESERVED_HEADERS.test(name)) continue
+    if (supportsReplay && location === 'header' && name.toLowerCase() === 'idempotency-key') continue
     params.push({ name, in: location, required: param.required === true })
     properties[name] = { ...(param.schema as JsonSchema), description: param.description }
     if (param.required === true) required.push(name)
+  }
+  if (supportsReplay) {
+    params.push({ name: 'Idempotency-Key', in: 'header', required: false })
+    properties['Idempotency-Key'] = {
+      type: 'string',
+      format: 'uuid',
+      description: 'Optional UUID for replaying this hosted write with the same business input for 24 hours.',
+    }
   }
 
   const body = requestBody(resolve(operation.requestBody) as Record<string, unknown> | undefined)
@@ -143,7 +156,6 @@ function toOperation(
   }
   if (body?.required) required.push(body.kind === 'json' ? 'body' : 'body_base64')
 
-  const responses = (operation.responses ?? {}) as Record<string, unknown>
   return {
     operationId,
     method,
@@ -172,23 +184,31 @@ function requestBody(body: Record<string, unknown> | undefined) {
   return binary ? { kind: 'binary' as const, contentType: binary, required, schema: {} } : undefined
 }
 
-/** Inlines local `$ref`s; a reference back into its own chain becomes `{}` so cycles terminate. */
-function refResolver(doc: OpenApiDocument): (value: unknown) => unknown {
-  const lookup = (ref: string) =>
-    ref
-      .replace(/^#\//, '')
-      .split('/')
-      .reduce<unknown>((node, key) => (node as Record<string, unknown> | undefined)?.[key], doc)
-  const inline = (value: unknown, chain: Set<string>): unknown => {
-    if (Array.isArray(value)) return value.map((item) => inline(item, chain))
+/** Inline references from the loaded v1 documents; recursive schema references terminate at their cycle. */
+function refResolver(doc: OpenApiDocument, documents: Record<string, OpenApiDocument>): (value: unknown) => unknown {
+  const inline = (value: unknown, source: OpenApiDocument, chain: Set<string>): unknown => {
+    if (Array.isArray(value)) return value.map((item) => inline(item, source, chain))
     if (!value || typeof value !== 'object') return value
-    const ref = (value as { $ref?: unknown }).$ref
-    if (typeof ref === 'string' && ref.startsWith('#/')) {
-      return chain.has(ref) ? {} : inline(lookup(ref), new Set(chain).add(ref))
+    const { $ref, ...siblings } = value as Record<string, unknown>
+    if (typeof $ref === 'string') {
+      const [file, pointer] = $ref.split('#')
+      const target = file ? documents[file.replace(/^\.\//, '')] : source
+      if (target && pointer?.startsWith('/')) {
+        const identity = `${Object.keys(documents).find((name) => documents[name] === target) ?? 'local'}#${pointer}`
+        if (chain.has(identity)) return {}
+        const resolved = pointer
+          .slice(1)
+          .split('/')
+          .reduce<unknown>(
+            (node, key) => (node as Record<string, unknown> | undefined)?.[key.replace(/~1/g, '/').replace(/~0/g, '~')],
+            target,
+          )
+        return inline({ ...(resolved as object), ...siblings }, target, new Set(chain).add(identity))
+      }
     }
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, inline(item, chain)]))
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, inline(item, source, chain)]))
   }
-  return (value) => inline(value, new Set())
+  return (value) => inline(value, doc, new Set())
 }
 
 function asArray(value: unknown): unknown[] {

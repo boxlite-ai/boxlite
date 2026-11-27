@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, UseGuards } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { Audit, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
@@ -18,6 +18,7 @@ import { OrganizationResourceActionGuard } from '../organization/guards/organiza
 import { RegistryCredential } from '../registry/entities/registry-credential.entity'
 import { RegistriesService } from '../registry/services/registries.service'
 import { CreateRegistryDto } from './dto/create-registry.dto'
+import { ReplayParseUUIDPipe } from '../common/replay-validation.pipe'
 
 type RestRegistryCredential = {
   id: string
@@ -87,7 +88,7 @@ export class BoxliteRegistryController {
   })
   async remove(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('id', ReplayParseUUIDPipe) id: string,
   ): Promise<void> {
     await this.registries.delete(authContext.organizationId, id)
   }

@@ -177,6 +177,94 @@ schema and drops it afterward; it skips without `DB_HOST`. Authentication guards
 and enrichment dependencies are replaced in this harness, so it does not establish
 credential-policy enforcement or deployed infrastructure behavior.
 
+## Request idempotency and replay
+
+Hosted `/api/v1` writes returning finite JSON or empty responses honour an optional
+`Idempotency-Key` UUID header through `RequestReplayInterceptor`, after authentication,
+organization membership, and resource permissions. New write routes are covered automatically;
+controllers do not opt in or manage reservations. Requests without the header execute normally.
+File transfers, WebSocket upgrades, and public or private tunnel preparation reject the header before
+their operation begins. Organization invitations retain their separate transactional replay, including
+their declared MCP `Idempotency-Key` input.
+
+For example, retrying `POST /boxes` with the same key and input returns the original Box ID
+and creation response even after quota fills or the Box changes state. Object key order is
+ignored; target parameters, query values, arrays, types, explicit null, and absent bodies matter.
+Equivalent organization-prefixed routes share identity after the prefix is authorized.
+
+Hosted Box API errors expose `code` and `message` at the top level; local runtime errors
+nest these fields under `error`. Both use the shared OpenAPI `ErrorResponse` definition.
+The mismatch, pending, and unknown status/code pairs follow [E2B's idempotent creation contract](https://docs.e2b.dev/sandbox/idempotency).
+
+| Condition | Response |
+| --- | --- |
+| Original success recorded | Original status, serialized bytes, Content-Type and Location |
+| Invalid or duplicate key, or a keyed request body with a non-JSON content type | `400` |
+| Same key with changed business input | `409 idempotency_request_mismatch` |
+| Original owner still active | `409 idempotency_in_progress` |
+| Outcome cannot be confirmed | `422 idempotency_outcome_unknown`; no redispatch |
+| Reservation storage unavailable | `503 idempotency_storage_unavailable`; no dispatch |
+
+Records expire 24 hours after first use. Heartbeats and retries preserve this absolute deadline.
+Only trusted validation or proven pre-effect admission errors make the same key retryable.
+Submitted work, downstream errors, disconnects, and unclassified exceptions retain the fence;
+the original owner can still record a late success. Never automatically switch keys after unknown.
+The response representation is limited to 1 MiB. Oversized responses and interrupted runner
+responses retain unknown. Records store the response, request fingerprint, and trusted resource
+metadata so audit entries for the original request and its replays identify the same resource.
+Cookie, CORS, authentication, and tracking headers belong to the current request.
+
+Replay uses a dedicated Redis connection with one-second connection and command deadlines,
+and no offline command queue or command resend. It requires `maxmemory-policy=noeviction`,
+which it checks with `INFO memory`. The ElastiCache and Memorystore stacks set this policy.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant Redis
+    Client->>API: Send keyed write
+    API->>Redis: Send claim with owner token
+    API-->>Client: Deadline expires, 503 before dispatch
+    API->>Redis: Queue cleanup on the same connection
+    Note over Redis: Redis resumes and processes the claim before cleanup
+    alt Token still owns a fresh reservation
+        Redis->>Redis: Delete reservation
+    else Token still owns a reclaimed reservation
+        Redis->>Redis: Restore retryable state with original fingerprint and expiry
+    else Owner differs or a response exists
+        Note over Redis: Preserve the current record
+    end
+```
+
+Capacity refusal rejects new keyed work before dispatch. Success delivery does not wait for
+response persistence; a retry in that short window receives 409. Redis loss, expiration, or
+manual deletion ends the guarantee. `GET /config` advertises `PT24H` and served operation IDs.
+MCP forwards the same key and business input; wait options only control result observation.
+
+Deployment must drain keyed writes, replace every API replica, then reopen traffic. A rollback
+must retain the shared reader/fence or stop the affected writes; a version that ignores valid
+keys cannot safely receive retries.
+
+Run `make test:apps:api TEST_FILES='request-replay|volume-access.guard|image-admission.service|box.service.spec'`
+with `REDIS_HOST/REDIS_PORT` for HTTP replay, Redis ownership, runner proxy, authorization and refund regressions.
+The suite focuses on shared replay boundaries rather than repeating every business resource's persistence tests.
+Missing Redis configuration skips integration tests and does not establish the contract.
+The capacity test requires a local `redis-server` executable to start an isolated noeviction instance.
+Install it before running the replay integration suite; a missing executable fails that test.
+
+Cross-replica assertions wait for the exact record to become complete: receiving the owner's
+HTTP success alone does not establish that Redis has stored it. Transport tests cover keyed file
+rejection and WebSocket attachment before side effects; existing guard tests cover trusted resource ownership.
+Storage fault regressions hold a real Redis reservation past the caller deadline and verify its release;
+corrupt records, oversized responses and unsafe eviction policies retain the request fence or reject dispatch.
+The concurrent HTTP test observes a renewed owner heartbeat before retrying on another replica.
+Disconnect tests confirm that an unfinished owner remains fenced and can publish its late response;
+failed outcome persistence also keeps retries from dispatching the business operation again.
+
+A Box rejected at its creation limit refunds exactly one cold-pull charge to the window that paid it.
+Refunds preserve the window's expiry; an expired ticket cannot debit a replacement window.
+
 ## Registration email policy
 
 With protection enabled, new OIDC identities register through `POST /api/auth/register`,

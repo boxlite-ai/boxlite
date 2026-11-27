@@ -20,15 +20,12 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
-  ForbiddenException,
   HttpCode,
   HttpStatus,
-  ParseIntPipe,
   Post,
   Query,
   Body,
   Header,
-  ValidationPipe,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
@@ -51,6 +48,9 @@ import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
 import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
+import { noEffect } from '../common/replay-no-effect'
+import { ReplayParseIntPipe, ReplayValidationPipe } from '../common/replay-validation.pipe'
+import { trackReplayUpstream } from './request-replay-response'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -442,9 +442,9 @@ export class BoxliteProxyController {
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
-    @Query('port', ParseIntPipe) port: number,
+    @Query('port', ReplayParseIntPipe) port: number,
     @UserContext() ctx: Context,
-    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) options: PrepareTunnelDto = {},
+    @Body(new ReplayValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) options: PrepareTunnelDto = {},
     @Req() request?: Request,
   ) {
     // findOneByIdOrName already 404s for a missing/destroyed box.
@@ -502,7 +502,7 @@ export class BoxliteProxyController {
   async revokeNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
-    @Query('port', ParseIntPipe) port: number,
+    @Query('port', ReplayParseIntPipe) port: number,
     @Req() request?: Request,
   ): Promise<void> {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
@@ -558,7 +558,14 @@ export class BoxliteProxyController {
       res.once('error', stop)
     }
 
-    opts?.admit?.(box, boxId)
+    // Only this local admission check proves that neither auto-resume nor
+    // runner dispatch has begun. An error after ensureReady may follow a start.
+    try {
+      opts?.admit?.(box, boxId)
+    } catch (error) {
+      if (error instanceof Error) throw noEffect(error)
+      throw error
+    }
 
     if (policy.autoResume && box.autoResume) {
       await this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit)
@@ -582,10 +589,11 @@ export class BoxliteProxyController {
       ws: opts?.ws ?? false,
       pathRewrite: () => targetPathForRunnerBox(box.id),
       on: {
-        proxyReq: (proxyReq: any, originalReq: any) => {
+        proxyReq: (proxyReq, originalReq) => {
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           fixRequestBody(proxyReq, originalReq)
         },
+        proxyRes: trackReplayUpstream,
       },
       proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,
     }

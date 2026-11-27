@@ -21,7 +21,6 @@ import {
   Req,
   UseGuards,
   UsePipes,
-  ValidationPipe,
 } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
@@ -34,6 +33,7 @@ import { BoxService } from '../box/services/box.service'
 import { HeldDomain, HeldDomains, DomainService } from '../box/services/domain.service'
 import { DomainTargetDto } from './dto/domain-target.dto'
 import { ClaimDomainDto } from './dto/claim-domain.dto'
+import { ReplayValidationPipe } from '../common/replay-validation.pipe'
 
 type RestDomain = HeldDomain
 
@@ -54,7 +54,7 @@ type RestDomainList = {
 @Controller(['v1/domains', 'v1/:prefix/domains'])
 @ApiExcludeController()
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
-@UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+@UsePipes(new ReplayValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 export class BoxliteDomainController {
   constructor(
     private readonly domainService: DomainService,

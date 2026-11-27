@@ -130,10 +130,15 @@ export class BoxliteWsProxyService {
       return
     }
 
+    if (req.headers['idempotency-key'] !== undefined) {
+      this.respondAndClose(socket, 400, 'Bad Request')
+      return
+    }
     // Browsers cannot set `Authorization` on a WebSocket; they send a ticket.
     const auth = req.headers['authorization']
       ? await this.authenticate(req, match.tenant)
       : await this.authenticateTicket(req, match)
+
     if (!auth) {
       this.respondAndClose(socket, 401, 'Unauthorized')
       return

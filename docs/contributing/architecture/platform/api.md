@@ -717,6 +717,54 @@ organization membership.
 
 </details>
 
+### Hosted write request replay
+
+`GET /api/v1/config` advertises `capabilities.idempotency_key_lifetime: "PT24H"`
+and `capabilities.idempotency_operations`, generated from registered routes and
+the shared replay policy. Check both on the target deployment before retrying.
+The shared OpenAPI header does not promise support in `boxlite serve` or the
+reference server. Unserved snapshot, clone, export and import operations are
+absent from discovery.
+
+Finite JSON and empty-response hosted writes use the global replay interceptor.
+New writes receive protection without a per-operation opt-in. Supported writes
+include Box lifecycle, execution control, volumes, checkpoints, image aliases,
+registry credentials, domains, network updates, tunnel revocation and SSH.
+Omitting `Idempotency-Key` preserves ordinary behavior and adds no replay-store
+dependency. Clients and SDKs do not add a key or retry automatically.
+
+For example, retry `POST /api/v1/boxes/box-1/exec` with the same UUID and JSON
+command to receive the original execution ID. MCP forwards that header to the
+same REST route; `wait` and `wait_timeout_seconds` control collection afterward
+and are excluded from the delegated business request.
+
+| Outcome | Same-key retry behavior |
+| --- | --- |
+| Original success recorded | Replays original status, bytes, Content-Type and Location, including empty 204 responses |
+| Original execution active | `409 idempotency_in_progress`; no second dispatch |
+| Business input changed | `409 idempotency_request_mismatch` |
+| Outcome cannot be confirmed | `422 idempotency_outcome_unknown`; never automatically bypass with a new key |
+| Proven rejection before effects | Allows another attempt with the same key and input |
+
+Every attempt checks current authentication and permissions. Keys are scoped to
+organization, user and operation; targets, business query and JSON values bind
+the request. File transfers, tunnel preparation and WebSocket upgrades reject
+a supplied key before side effects. Reads retain their ordinary behavior, and
+organization invitations retain their separate transaction replay contract.
+SSH configuration without a key can restart the listener on every call; retry
+only with the same input and key when the deployment advertises the operation.
+
+Retention starts at first use and lasts 24 hours without extension. Expiry,
+record loss or manual removal ends the deduplication guarantee. Redis must not
+evict valid records; this mechanism does not make business effects and Redis
+completion one atomic transaction.
+
+For deployment, drain or pause keyed writes, replace every API replica, then
+reopen traffic. Preserve the Redis namespace and records. Never mix replicas
+that silently ignore newly supported keys with replicas enforcing them.
+Rollback must retain the public replay reader and fences, or stop affected
+writes; returning to a version that ignores valid keys can duplicate effects.
+
 <details>
 <summary><b>Box lifecycle</b> · 7 routes</summary>
 

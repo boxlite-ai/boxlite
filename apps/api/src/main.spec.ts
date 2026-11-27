@@ -45,6 +45,12 @@ jest.mock('./box/controllers/secret-credential.controller', () => ({
 jest.mock('./mcp/mcp-body', () => ({ useApiBodyParsers: jest.fn() }))
 jest.mock('./mcp/mcp-tools', () => ({ McpTools: class {} }))
 jest.mock('./mcp/mcp-routes', () => ({ servedOperations: () => [] }))
+jest.mock('./boxlite-rest/request-replay.interceptor', () => ({ RequestReplayInterceptor: class {} }))
+jest.mock('./boxlite-rest/request-replay-policy', () => ({
+  RequestReplayPolicy: class RequestReplayPolicy {},
+  REPLAY_LIFETIME: 'PT24H',
+}))
+jest.mock('./common/replay-validation.pipe', () => ({ ReplayValidationPipe: class {} }))
 
 describe('API bootstrap listener', () => {
   const environment = process.env
@@ -76,7 +82,9 @@ describe('API bootstrap listener', () => {
       matchAttachPath: jest.fn(() => false),
     }
     const app = {
-      get: jest.fn(() => service),
+      get: jest.fn((key: unknown) =>
+        (key as { name?: string } | undefined)?.name === 'RequestReplayPolicy' ? { configure: jest.fn() } : service,
+      ),
       use: jest.fn(),
       useLogger: jest.fn(),
       flushLogs: jest.fn(),

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, Delete, Get, HttpCode, Param, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common'
+import { Controller, Delete, Get, HttpCode, Param, Query, UseGuards, UsePipes } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
@@ -20,6 +20,7 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { OrganizationActionGuard } from '../organization/guards/organization-action.guard'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { AdminPageQuery, adminNextPage } from './dto/admin-page-query.dto'
+import { ReplayValidationPipe } from '../common/replay-validation.pipe'
 
 type RestMember = {
   type: 'user'
@@ -34,7 +35,7 @@ type RestMember = {
 @Controller('v1/organizations/users')
 @ApiExcludeController()
 @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, OrganizationActionGuard)
-@UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+@UsePipes(new ReplayValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 export class BoxliteMemberController {
   constructor(private readonly organizationUserService: OrganizationUserService) {}
 

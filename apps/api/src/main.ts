@@ -12,7 +12,7 @@ import { NestFactory } from '@nestjs/core'
 import { NestExpressApplication } from '@nestjs/platform-express'
 import { AppModule } from './app.module'
 import { SwaggerModule } from '@nestjs/swagger'
-import { INestApplication, Logger, ValidationPipe } from '@nestjs/common'
+import { INestApplication, Logger } from '@nestjs/common'
 import { Context } from './common/context/context'
 import { PlatformReason } from './common/context/platform-reason.enum'
 import { AllExceptionsFilter } from './filters/all-exceptions.filter'
@@ -43,6 +43,9 @@ import { useApiBodyParsers } from './mcp/mcp-body'
 import { McpTools } from './mcp/mcp-tools'
 import { servedOperations } from './mcp/mcp-routes'
 import { CiListenerService } from './ci/ci-listener.service'
+import { RequestReplayInterceptor } from './boxlite-rest/request-replay.interceptor'
+import { RequestReplayPolicy } from './boxlite-rest/request-replay-policy'
+import { ReplayValidationPipe } from './common/replay-validation.pipe'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -103,8 +106,9 @@ async function bootstrap() {
   app.useGlobalInterceptors(new LoggerErrorInterceptor())
   app.useGlobalInterceptors(new MetricsInterceptor(configService, app.get(AnalyticsService)))
   app.useGlobalInterceptors(app.get(AuditInterceptor))
+  app.useGlobalInterceptors(app.get(RequestReplayInterceptor))
   app.useGlobalPipes(
-    new ValidationPipe({
+    new ReplayValidationPipe({
       transform: true,
     }),
   )
@@ -204,6 +208,7 @@ async function bootstrap() {
       dashboard: document,
       served: servedOperations(app.getHttpAdapter().getInstance(), (path) => !!wsProxy.matchAttachPath(path)),
     })
+    app.get(RequestReplayPolicy).configure(app.getHttpAdapter().getInstance(), openapi('box.openapi.yaml'))
     // Started on its own, before listen(), so `/mcp` is ready with the first
     // request; Kafka below keeps its own start and cannot delay this one.
     await app.connectMicroservice({ strategy: mcpStrategy }).listen()

@@ -17,7 +17,6 @@ import {
   HttpCode,
   UseGuards,
   UsePipes,
-  ValidationPipe,
   Logger,
   Res,
   Req,
@@ -51,6 +50,8 @@ import { Audit, AUDIT_TARGET_ID, MASKED_AUDIT_VALUE, TypedRequest } from '../aud
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
+import { ReplayValidationPipe } from '../common/replay-validation.pipe'
+import { noEffect } from '../common/replay-no-effect'
 import { Context } from '../common/context/context'
 import { BoxPageQuery } from './dto/box-page-query.dto'
 
@@ -77,7 +78,7 @@ const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 //
 // `whitelist` alone only strips unknown fields; `forbidNonWhitelisted` is what
 // turns a stripped field into a 400. Both are required.
-@UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+@UsePipes(new ReplayValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 @ApiBearerAuth()
 export class BoxliteBoxController {
   private readonly logger = new Logger(BoxliteBoxController.name)
@@ -136,15 +137,7 @@ export class BoxliteBoxController {
     if (dto.checkpoint_id !== undefined) {
       return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
     }
-
-    // Attaching a managed volume grants the box read/write access to its data,
-    // so it is authorized independently of WRITE_BOXES: the caller must hold the
-    // volume permissions too. WRITE_BOXES alone must not reach another key's
-    // volumes (GHSA-2qqv-7cwv-mj8h).
-    if (dto.volumes?.length) {
-      this.assertCanAttachVolumes(authContext)
-    }
-
+    if (dto.volumes?.length) this.assertCanAttachVolumes(authContext)
     const organization = authContext.organization
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
@@ -203,15 +196,17 @@ export class BoxliteBoxController {
       .filter(([field, value]) => value !== undefined && field !== 'checkpoint_id' && field !== 'name')
       .map(([field]) => field)
     if (overrides.includes('image')) {
-      throw new BadRequestException('checkpoint_id and image are mutually exclusive')
+      throw noEffect(new BadRequestException('checkpoint_id and image are mutually exclusive'))
     }
     if (overrides.length) {
-      throw new BadRequestException(
-        `A box created from a checkpoint inherits its settings; only name may be set, remove: ${overrides.join(', ')}`,
+      throw noEffect(
+        new BadRequestException(
+          `A box created from a checkpoint inherits its settings; only name may be set, remove: ${overrides.join(', ')}`,
+        ),
       )
     }
     if (dto.name !== undefined && (typeof dto.name !== 'string' || !CHECKPOINT_BOX_NAME.test(dto.name))) {
-      throw new BadRequestException('Invalid box name')
+      throw noEffect(new BadRequestException('Invalid box name'))
     }
 
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(authContext.organizationId)
@@ -247,7 +242,7 @@ export class BoxliteBoxController {
   private assertCanAttachVolumes(authContext: OrganizationAuthContext): void {
     const required = [OrganizationResourcePermission.READ_VOLUMES, OrganizationResourcePermission.WRITE_VOLUMES]
     if (!hasOrganizationResourcePermissions(authContext, required)) {
-      throw new ForbiddenException(`Attaching a volume requires: ${required.join(', ')}`)
+      throw noEffect(new ForbiddenException(`Attaching a volume requires: ${required.join(', ')}`))
     }
   }
 
