@@ -174,6 +174,39 @@ The new API should read from and write to `display_name` only. The trigger handl
 
 ## Migration Scripts
 
+API startup with `RUN_MIGRATIONS=true` and the migration CLI share the PostgreSQL
+session lock named `boxlite:typeorm:migrations`. A migrator holds one primary
+connection from acquiring the lock through the final journal write. A waiting
+migrator reads the journal only after acquiring the lock.
+
+```mermaid
+sequenceDiagram
+    participant A as API startup
+    participant P as PostgreSQL
+    participant B as Migration CLI
+    A->>P: Acquire the session lock and read the journal
+    A->>P: Run pending DDL
+    B->>P: Try the lock in a short autocommit query
+    P-->>B: Lock held by API startup
+    A->>P: Record completed migrations and release the lock
+    B->>P: Acquire the lock and reread the journal
+```
+
+Lock acquisition waits up to five minutes. Each lock query has a five-second client
+and server limit.
+
+The migrator closes its connection when it cannot confirm acquiring or releasing the
+lock. After the migration commits, a release failure emits a warning and preserves
+the successful result so a caller does not retry a completed revert.
+Use a direct or session-pooled PostgreSQL connection.
+
+Automatic startup migration is the deployment default. For a release with a pending
+post-deploy migration, deploy with `mdeploy` and set the stage's `RUN_MIGRATIONS`
+to `false` before rollout. The legacy SST stack always enables startup migrations.
+
+Run the phase commands from the release's `apps` workspace with the target database
+configuration. Apply the post-deploy phase after the old API replicas retire.
+
 ### `npm run migration:run:init`
 
 Runs **all migrations** from both pre-deploy and post-deploy folders. Use this for:
@@ -250,13 +283,15 @@ When that last migration is `AddAdminUsageWindowIndexes1792470000000`, use:
 npm run migration:revert -- --transaction none
 ```
 
-TypeORM 0.3.31 starts a transaction for `undoLastMigration` in `each` mode despite
-the migration's `transaction = false`; concurrent index drops require `none`.
-Use the default transactional command for other migrations. If a concurrent index
-build or drop is interrupted, rerun it: valid completed indexes are retained,
-invalid build leftovers are removed and rebuilt, and missing indexes are skipped on drop.
-Serialize migration runners; concurrent DDL still waits for older transactions and
-is not a production capacity guarantee.
+TypeORM `0.3.31` starts a transaction for `undoLastMigration` in `each` mode even
+when the migration declares `transaction = false`. Concurrent index drops require
+`none`. Use the default transactional command for other migrations.
+
+Rerun interrupted concurrent index builds or drops. A rerun retains valid indexes,
+rebuilds invalid indexes, and skips dropping indexes that are already absent.
+
+The migration lock serializes migration runners. Concurrent DDL can still wait for
+older application transactions.
 
 **Important behaviors:**
 

@@ -26,7 +26,7 @@ import {
 } from '../runner-adapter/outbound-control'
 import { outboundCreateBoxRequest } from '../runner-adapter/outbound-create-box'
 import { BoxStartAction } from '../managers/box-actions/box-start.action'
-import { completeOutboundRecord } from '../stores/outbound-policy.store'
+import { completeOutboundRecord, lockCompleteRunner } from '../stores/outbound-policy.store'
 import { JobService } from './job.service'
 
 const COMPLETE_CREATE = JobType.CREATE_COMPLETE_OUTBOUND_BOX
@@ -74,7 +74,7 @@ export class CompleteCreateJobService implements OnApplicationBootstrap {
   async claim(context: RunnerContext, token: string | undefined): Promise<Payload['request'] | null> {
     const worker = this.worker(context, token)
     return this.dataSource.transaction(async (manager) => {
-      const lease = await this.lease(manager, worker.runnerId, worker)
+      const lease = await this.lease(manager, worker.runnerId, worker, false, true)
       if (!lease) throw new ForbiddenException('Runner has no matching complete outbound lease')
       const job = await manager
         .createQueryBuilder(Job, 'job')
@@ -147,7 +147,6 @@ export class CompleteCreateJobService implements OnApplicationBootstrap {
             (job.status = :pending AND NOT EXISTS (
               SELECT 1 FROM complete_outbound_runner_enrollment e
               JOIN "runner" r ON r.id = e.runner_id
-              JOIN complete_outbound_admission a ON a.id = 1 AND a.minimum_release = e.verified_floor
               WHERE e.runner_id = box."runnerId" AND e.expires_at > clock_timestamp()
                 AND r."apiVersion" = '2'
                 AND e.runner_key_sha256 = encode(sha256(convert_to(r."apiKey", 'UTF8')), 'hex')
@@ -182,11 +181,11 @@ export class CompleteCreateJobService implements OnApplicationBootstrap {
 
   async reconcileJob(jobId: string): Promise<void> {
     const { job, runner } = await this.dataSource.transaction(async (manager) => {
-      // Hold the release row before taking the job lock, including on recovery.
-      const [floor] = await manager.query(`SELECT id FROM complete_outbound_admission
-        WHERE id = 1 AND api_principal = current_user AND minimum_release IS NOT NULL AND phase <> 'downgrading' FOR SHARE`)
-      const locked = await this.lockJob(manager, jobId)
-      if (!floor || locked.completedAt || (locked.status !== JobStatus.PENDING && !this.expired(locked))) {
+      const candidate = await manager.findOneBy(Job, { id: jobId, type: COMPLETE_CREATE })
+      if (!candidate) throw new ConflictException('Complete create job is unavailable')
+      await lockCompleteRunner(manager, candidate.runnerId)
+      const locked = await this.lockJob(manager, jobId, candidate.runnerId)
+      if (locked.completedAt || (locked.status !== JobStatus.PENDING && !this.expired(locked))) {
         return { job: locked }
       }
       const payload = this.payload(locked)
@@ -260,21 +259,20 @@ export class CompleteCreateJobService implements OnApplicationBootstrap {
     runnerId: string,
     worker?: Worker,
     allowExpired = false,
+    forClaim = false,
   ): Promise<string | null> {
-    const [control] = await manager.query(
-      'SELECT phase, minimum_release FROM complete_outbound_admission WHERE id = 1 AND api_principal = current_user FOR SHARE',
-    )
-    if (!control?.minimum_release || control.phase === 'downgrading') return null
+    await lockCompleteRunner(manager, runnerId)
     const [enrolled] = await manager.query(
       `SELECT enrollment.lease_id
       FROM complete_outbound_runner_enrollment AS enrollment
       JOIN "runner" AS runner ON runner.id = enrollment.runner_id
-      WHERE runner.id = $1 AND runner."apiVersion" = '2' AND enrollment.verified_floor = $2
+      WHERE runner.id = $1 AND runner."apiVersion" = '2'
         AND enrollment.runner_key_sha256 = encode(sha256(convert_to(runner."apiKey", 'UTF8')), 'hex')
         ${allowExpired ? '' : 'AND enrollment.expires_at > clock_timestamp()'}
-        ${worker ? 'AND enrollment.token_sha256 = $3 AND runner."apiKey" = $4' : ''}
-      FOR SHARE OF runner`,
-      [runnerId, control.minimum_release, ...(worker ? [worker.tokenHash, worker.apiKey] : [])],
+        ${forClaim ? "AND runner.state = 'ready' AND NOT runner.unschedulable AND NOT runner.draining" : ''}
+        ${worker ? 'AND enrollment.token_sha256 = $2 AND runner."apiKey" = $3' : ''}
+      FOR SHARE OF enrollment`,
+      [runnerId, ...(worker ? [worker.tokenHash, worker.apiKey] : [])],
     )
     return enrolled?.lease_id ?? null
   }
