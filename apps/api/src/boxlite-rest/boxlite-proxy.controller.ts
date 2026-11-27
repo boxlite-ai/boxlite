@@ -31,7 +31,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
-import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
+import { createProxyMiddleware, errorResponsePlugin, fixRequestBody, Options } from 'http-proxy-middleware'
 import { Request, Response, NextFunction } from 'express'
 import type { IncomingMessage } from 'node:http'
 import { context, propagation } from '@opentelemetry/api'
@@ -611,6 +611,7 @@ export class BoxliteProxyController {
       changeOrigin: true,
       autoRewrite: true,
       ws: opts?.ws ?? false,
+      plugins: [errorResponsePlugin],
       pathRewrite: () => targetPathForRunnerBox(box.id),
       on: {
         proxyReq: (proxyReq: any, originalReq: any) => {
