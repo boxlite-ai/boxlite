@@ -35,8 +35,9 @@ boxlite-vmm
 | Module | Responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam |
-| `control` | `VmControl` provides runtime controls for VM status, pause, resume, stop, and disk resize by configured ID |
-| `lifecycle` | `Lifecycle` coordinates the one-shot run, pause epochs, and the shared stop latch |
+| `control` | `VmControl` provides runtime controls for VM status, pause, resume, export, stop, and `resize_disk` by configured ID |
+| `lifecycle` | `Lifecycle` coordinates the one-shot run, pause epochs, the control mailbox, and the shared stop latch |
+| `snapshot` | Captures and exports machine state and raw guest RAM for paused device-less VMs on Linux x86_64 |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -738,6 +739,50 @@ workers, and finishing the console. A worker join timeout leaves the status at
 `Stopping` until the VM is dropped. RAM stays mapped after `run`.
 Dropping the VM handles RAM teardown and publishes `Exited` to surviving
 controls, including when the VM never ran.
+
+### Exporting a paused VM
+
+On Linux x86_64, call `control.export(state_path, memory_path)` from a
+control thread while a device-less VM is paused. `Vm` currently has no public
+device-less constructor (`Vm::new_device_less` is crate-internal for tests).
+Other hosts return `ControlReason::Unsupported`. Other handles can observe the
+pause during capture and I/O. A competing `request_pause`, `resume`, or
+`export` returns `InvalidState`. Relative paths are resolved against the current
+working directory when the export is admitted.
+
+The driver saves platform state first. If it succeeds, each parked vCPU
+saves its state on its owning thread. The driver collects all replies
+and sorts the vCPU records by ID before writing either file. Following
+`boxlite-hypervisor`'s capture exclusions, x86 machine state excludes nested
+virtualization, Hyper-V SynIC, and guest-debug state. Pausing stops vCPUs but
+not KVM's in-kernel timers, so platform capture is non-atomic; PIT restore
+loses sub-tick phase and can re-arm one-shot modes (0, 1, and 4).
+
+Export creates both files exclusively with `create_new` and mode `0600`
+(subject to the process `umask`). It skips `fsync`, and dropping the files
+ignores delayed `close(2)` errors. `Ok(())` provides no guarantee of power-loss
+durability. An existing target, including reuse of the state path for memory,
+returns `Error::Snapshot` with `AlreadyExists` without changing its contents.
+
+Callers must have exclusive use of both target paths during export. If export
+fails after creating a file, `boxlite-vmm` leaves it in place, even if partially
+written. The caller (runtime or runner) is responsible for cleanup, for example
+by exporting into a temporary directory and atomically renaming it on success.
+
+Capture and I/O failures leave a live VM paused. File writeout is synchronous
+and is not interrupted by a stop request. The driver handles the stop after
+an in-flight platform `save_state` or file writeout finishes. If stop is
+requested during a vCPU's `save_state`, the driver abandons the capture request
+so `export()` returns `TerminalOutcome` without waiting, but `run()` still waits
+for the vCPU thread to exit. If the VM is terminal at the final lifecycle check,
+`finish_export` returns `TerminalOutcome`.
+
+The state file starts with a 32-byte little-endian header with the magic
+`BXLVMST1`, followed by Postcard machine state with vCPU records in ID order.
+The memory file contains exactly the header's declared RAM byte count.
+Raw RAM starts at offset zero and follows guest physical address order,
+skipping the `[3 GiB, 4 GiB)` PCI hole. Machine state targets the same host
+and KVM environment.
 
 ## Long-mode entry
 

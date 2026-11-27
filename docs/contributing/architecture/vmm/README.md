@@ -585,6 +585,47 @@ setup. Its empty disk registry makes `resize_disk()` return `InvalidInput`.
 - **SIGTERM.** The shim asks the guest to shut down over gRPC and re-raises
   the signal to end the process.
 
+### Snapshot export
+
+`VmControl::export(state_path, memory_path)` reserves the control slot for a
+paused device-less VM on Linux x86_64. While export is pending or active,
+`request_pause`, `resume`, and another `export` are rejected. `Vm` currently has
+no public device-less constructor (`Vm::new_device_less` is crate-internal for
+tests). Once all vCPUs have completed pending I/O and parked, the driver saves
+the VM platform state.
+If this fails, the driver releases the slot and returns the error without
+dispatching vCPU capture. On success, each vCPU saves its state on its owning
+thread. The driver collects all replies, including failures, and writes the
+platform state and ID-ordered vCPU records only if every capture succeeds.
+Following `boxlite-hypervisor`'s capture exclusions, x86 machine state excludes
+nested virtualization, Hyper-V SynIC, and guest-debug state. Pausing stops
+vCPUs but not KVM's in-kernel timers, so platform capture is non-atomic; PIT
+restore loses sub-tick phase and can re-arm one-shot modes (0, 1, and 4).
+
+The state file has a 32-byte little-endian header containing the eight-byte
+magic `BXLVMST1`, `u32` version `1`, `u32` vCPU count, `u64` RAM length, and
+`u64` machine-state length. Postcard encodes the following vCPU and platform
+state. The memory file contains raw RAM from offset zero in `ram.ranges()`
+order, skipping `[3 GiB, 4 GiB)`. Its length equals the header's RAM length.
+
+The driver creates both files exclusively with `create_new` and mode `0600`
+(subject to the process `umask`) and writes them synchronously without
+interruption by stop requests. Relative paths are resolved against the current
+working directory when the export is admitted. The driver handles a stop after
+an in-flight platform `save_state` or file writeout finishes. If stop is requested
+during a vCPU's `save_state`, the driver abandons the capture request so
+`export()` returns `TerminalOutcome` without waiting, but `run()` still waits
+for the vCPU thread to exit. `finish_export` releases the control slot and
+returns `TerminalOutcome` if the VM is terminal. The driver skips `fsync`, and
+dropping the files ignores delayed `close(2)` errors. `Ok(())` provides no
+guarantee of power-loss durability.
+
+Callers must have exclusive use of both target paths during export. Existing
+targets return `AlreadyExists` and retain their contents. If export fails
+after creating a file, `boxlite-vmm` leaves it in place, even if partially
+written. The caller (runtime or runner) is responsible for cleanup, for example
+by exporting into a temporary directory and atomically renaming it on success.
+
 ### Where the engine plugs in (M2)
 
 - **Engine choice.** The `native-vmm` experimental token gates

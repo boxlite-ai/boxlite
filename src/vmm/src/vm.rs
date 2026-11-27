@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use boxlite_hypervisor::Vm as HostVm;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use crate::snapshot::export;
 use crate::{
     chipset::{Chipset, ChipsetBuilder},
     config::VmConfig,
@@ -391,31 +393,32 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                     Ok(None) => {}
                 }
                 let kick_all = self.lifecycle.drive(self.vcpu_count);
-                if !kick_all && pending_kicks == 0 {
-                    continue;
-                }
-                if self.lifecycle.status() != VmStatus::Pausing || vcpus.sender.is_stopping() {
-                    pending_kicks = 0;
-                    continue;
-                }
-                let kicks = kicks.lock().unwrap_or_else(PoisonError::into_inner);
-                // Startup only appends handles, so their indices stay stable.
-                for (index, kick) in kicks.iter().enumerate() {
-                    let bit = 1u64 << index;
-                    if !kick_all && pending_kicks & bit == 0 {
-                        continue;
-                    }
-                    match kick.kick() {
-                        Ok(()) => pending_kicks &= !bit,
-                        Err(error) if retryable_kick(&error) => {
-                            pending_kicks |= bit;
+                if kick_all || pending_kicks != 0 {
+                    if self.lifecycle.status() != VmStatus::Pausing || vcpus.sender.is_stopping() {
+                        pending_kicks = 0;
+                    } else {
+                        let kicks = kicks.lock().unwrap_or_else(PoisonError::into_inner);
+                        // Startup only appends handles, so their indices stay stable.
+                        for (index, kick) in kicks.iter().enumerate() {
+                            let bit = 1u64 << index;
+                            if !kick_all && pending_kicks & bit == 0 {
+                                continue;
+                            }
+                            match kick.kick() {
+                                Ok(()) => pending_kicks &= !bit,
+                                Err(error) if retryable_kick(&error) => {
+                                    pending_kicks |= bit;
+                                }
+                                Err(error) => {
+                                    vcpus.sender.send(Event::VcpuFailed(error.into()));
+                                    break;
+                                }
+                            }
                         }
-                        Err(error) => {
-                            vcpus.sender.send(Event::VcpuFailed(error.into()));
-                            break;
-                        }
                     }
                 }
+                #[cfg(target_os = "linux")]
+                export::drive(vcpus.lifecycle, vcpus.host_vm, &self.ram, self.vcpu_count);
             }
         });
         match event {

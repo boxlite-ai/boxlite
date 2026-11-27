@@ -10,7 +10,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Why a VM control operation was refused or failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ControlReason {
+    /// The operation is unavailable on this host platform.
+    Unsupported,
     /// The operation is unavailable in the current lifecycle state.
     InvalidState,
     /// The operation requires a device-less configuration.
@@ -24,6 +27,7 @@ pub enum ControlReason {
 impl fmt::Display for ControlReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::Unsupported => "operation is unsupported on this host platform",
             Self::InvalidState => "invalid state",
             Self::UnsupportedDevice => "operation requires a device-less VM",
             Self::DeadlineTimeout => "vCPU acknowledgements are still incomplete",
@@ -44,6 +48,8 @@ pub enum Error {
         operation: &'static str,
         reason: ControlReason,
     },
+    /// Encoding or writing a VM snapshot failed.
+    Snapshot(io::Error),
     /// The vCPU count is outside `1..=config::MAX_VCPUS`.
     InvalidVcpuCount(u8),
     /// Opening or configuring filesystem exports failed.
@@ -134,6 +140,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Control { operation, reason } => write!(f, "{operation}: {reason}"),
+            Self::Snapshot(source) => write!(f, "snapshot: {source}"),
             Self::Vsock(_) => f.write_str("failed to configure vsock bridges"),
             Self::Filesystem(_) => f.write_str("failed to configure virtio-fs exports"),
             Self::InvalidVcpuCount(count) => write!(f, "invalid vCPU count: {count}"),
@@ -234,6 +241,7 @@ impl error::Error for Error {
             | Self::VcpuPanicked { .. }
             | Self::AlreadyRan => None,
             Self::Vsock(source)
+            | Self::Snapshot(source)
             | Self::Filesystem(source)
             | Self::HostMemoryCapability(source)
             | Self::PlanHotplugMemory { source, .. }

@@ -16,6 +16,8 @@ use boxlite_hypervisor::{IoCompletion, Vcpu, VcpuExit};
 #[cfg(target_arch = "x86_64")]
 use boxlite_hypervisor::{X86BootRegisters, X86Vcpu, X86Vm};
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use crate::snapshot::state::VcpuRecord;
 use crate::{
     chipset::Chipset,
     error::{Error, Result},
@@ -119,10 +121,15 @@ impl<H: X86Vm> Workers<'_, H> {
     /// pending I/O.
     fn run_guest(&self, vcpu: &mut H::Vcpu, id: u8) -> Result<Option<Event>> {
         loop {
-            if let Some(event) = self
+            #[cfg(target_os = "linux")]
+            let checkpoint = self
                 .lifecycle
-                .checkpoint(id, || park_vcpu(self.chipset, vcpu, id))?
-            {
+                .checkpoint_with_capture(id, vcpu, |vcpu| park_vcpu(self.chipset, vcpu, id));
+            #[cfg(not(target_os = "linux"))]
+            let checkpoint = self
+                .lifecycle
+                .checkpoint(id, || park_vcpu(self.chipset, vcpu, id));
+            if let Some(event) = checkpoint? {
                 return Ok(Some(event));
             }
             // A stop may have released this worker from its checkpoint.
@@ -179,4 +186,10 @@ pub(crate) fn park_vcpu(chipset: &Chipset, vcpu: &mut impl Vcpu, id: u8) -> Resu
         result => result?,
     }
     Ok(None)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn capture(vcpu: &mut impl X86Vcpu, id: u8) -> Result<VcpuRecord> {
+    let state = vcpu.save_state()?;
+    Ok(VcpuRecord { id, state })
 }

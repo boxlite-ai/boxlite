@@ -3,7 +3,7 @@
 
 //! Runtime controls for a VM.
 
-use std::{collections::HashMap, io, sync::Arc, time::Duration};
+use std::{collections::HashMap, io, path::Path, sync::Arc, time::Duration};
 
 use crate::{
     MemoryStatus,
@@ -31,6 +31,12 @@ impl VmControl {
     }
 
     /// Requests a stop, including before execution starts, without waiting for exit.
+    ///
+    /// A stop request does not interrupt an in-flight platform `save_state` or
+    /// snapshot file writeout. The driver handles the stop after that work
+    /// finishes. If stop is requested during a vCPU's `save_state`, the driver
+    /// abandons the capture request so [`Self::export`] returns `TerminalOutcome`
+    /// without waiting, but `Vm::run()` still waits for the vCPU thread to exit.
     pub fn stop(&self) {
         self.lifecycle.stop();
     }
@@ -45,6 +51,52 @@ impl VmControl {
     /// Reopens guest entry for a paused VM after the run driver accepts it.
     pub fn resume(&self) -> Result<()> {
         self.lifecycle.resume()
+    }
+
+    /// Exports a paused device-less VM on Linux x86_64 to new state and raw RAM files.
+    /// Pausing stops vCPUs but not KVM's in-kernel timers, so platform capture is
+    /// non-atomic; PIT restore loses sub-tick phase and can re-arm one-shot modes
+    /// (0, 1, and 4).
+    ///
+    /// While export is pending or active, `request_pause`, `resume`, and another
+    /// `export` are rejected. File writeout is synchronous and is not interrupted
+    /// by a stop request. If the VM is terminal at the final lifecycle check,
+    /// export returns `TerminalOutcome`.
+    ///
+    /// Both files are created exclusively with `create_new` and mode `0600`
+    /// (subject to the process `umask`). An existing target returns `AlreadyExists`
+    /// without changing its contents.
+    /// Export skips `fsync`, and dropping the files ignores delayed `close(2)` errors.
+    /// `Ok(())` provides no guarantee of power-loss durability.
+    ///
+    /// `Vm` currently has no public device-less constructor, so `export()` only
+    /// applies to device-less VMs. Callers must have exclusive use of both
+    /// target paths during export. If export fails after creating a file,
+    /// `boxlite-vmm` leaves it in place, even if partially written. The caller
+    /// (runtime or runner) is responsible for cleanup, for example by exporting
+    /// into a temporary directory and atomically renaming it on success.
+    /// Relative paths are resolved against the current working directory when
+    /// the export is admitted.
+    pub fn export(
+        &self,
+        state_path: impl AsRef<Path>,
+        memory_path: impl AsRef<Path>,
+    ) -> Result<()> {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            self.lifecycle
+                .submit_export(state_path.as_ref(), memory_path.as_ref())?
+                .recv()
+                .unwrap_or_else(|_| Err(crate::lifecycle::export_terminated()))
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            let _ = (state_path, memory_path);
+            Err(crate::Error::Control {
+                operation: "export",
+                reason: crate::ControlReason::Unsupported,
+            })
+        }
     }
 
     /// Waits for the current pause epoch, including a reserved or queued pause.
@@ -150,3 +202,7 @@ impl ControlRegistry {
         Ok(requests)
     }
 }
+
+#[cfg(all(test, not(all(target_os = "linux", target_arch = "x86_64"))))]
+#[path = "../tests/snapshot/image.rs"]
+mod snapshot_tests;
