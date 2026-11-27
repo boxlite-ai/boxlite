@@ -98,6 +98,12 @@ export class ExecutionJournal {
 
   async scope(lease: ExecutionLease, key: string): Promise<ScopeRow> {
     lease = { ...lease }
+    const row = await this.readScopeMetadata(lease, key)
+    await this.usage(Object.values(domains(row.scope)), lease)
+    return row
+  }
+
+  private async readScopeMetadata(lease: ExecutionLease, key: string): Promise<ScopeRow> {
     const id = scopeId(key)
     await this.check(lease)
     const records = new Map(
@@ -117,7 +123,6 @@ export class ExecutionJournal {
       const [mapping] = await this.state.read(['app-scope/' + id], lease)
       if (!mapping || !object(mapping.payload) || mapping.payload.application !== application) throw new StateCorrupt()
     }
-    await this.usage(Object.values(domains(scope)), lease)
     return { record, scope, activity: activity!, index, active }
   }
 
@@ -250,7 +255,7 @@ export class ExecutionJournal {
   }
   private async capacityMargin(lease: ExecutionLease, scope: string, policy: CapacityPolicy): Promise<number> {
     lease = { ...lease }
-    const ids = domains((await this.scope(lease, scope)).scope)
+    const ids = domains((await this.readScopeMetadata(lease, scope)).scope)
     const usage = await this.usage(Object.values(ids), lease)
     let free = 2_147_483_647
     for (const { maximum, domain } of policy.limits) {

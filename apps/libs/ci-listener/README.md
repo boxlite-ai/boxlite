@@ -405,6 +405,11 @@ points use this kernel; runtime acceptance remains a separate deployment check.
 
 Hosted CI and the standalone Listener Box use the same TypeScript Scale Set client for every installation. The elected listener opens one cancellable session per binding, execution scope and worker specification. Each session sends its available capacity to GitHub and explicitly acquires eligible job requests.
 
+Before a poll or a charged retry that needs a capacity check, the journal validates
+the scope and reads the global, organization and account counters in one lease-fenced
+batch. It computes the margin from that batch, including validation of domains with
+no configured limit. A new reservation checks current counter versions when it commits.
+
 An authenticated queued-job observation can seed an additional supported resource label, with up to 64 open sessions per scope. When more specifications are waiting, an empty poll on an idle set gives another specification a turn. An active set keeps its session.
 
 A failed session releases its lane during backoff. Other specifications can start while the failed one waits for its retry deadline.
