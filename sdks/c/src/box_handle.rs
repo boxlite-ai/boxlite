@@ -22,7 +22,7 @@ use crate::event_queue::{
     CBoxStopBoxCb, EventQueue, RuntimeEvent, push_event,
 };
 use crate::options::OptionsHandle;
-use crate::runtime::RuntimeHandle;
+use crate::runtime::{RuntimeHandle, RuntimeLiveness};
 use crate::util::c_str_to_string;
 use crate::{CBoxHandle, CBoxliteError, CBoxliteOptions, CBoxliteRuntime};
 
@@ -36,6 +36,7 @@ pub struct BoxHandle {
     pub box_id: BoxID,
     pub tokio_rt: Arc<TokioRuntime>,
     pub queue: Arc<EventQueue>,
+    pub liveness: Arc<RuntimeLiveness>,
 }
 
 #[unsafe(no_mangle)]
@@ -165,6 +166,7 @@ unsafe fn create_box(
         let runtime_clone = runtime_ref.runtime.clone();
         let tokio_rt = runtime_ref.tokio_rt.clone();
         let queue = runtime_ref.queue.clone();
+        let liveness = Arc::clone(&runtime_ref.liveness);
         let user_data_addr = user_data as usize;
         let task_tokio_rt = tokio_rt.clone();
         let task_queue = queue.clone();
@@ -180,6 +182,7 @@ unsafe fn create_box(
                         box_id,
                         tokio_rt: task_tokio_rt,
                         queue: task_queue.clone(),
+                        liveness,
                     });
                     crate::event_queue::OwnedFfiPtr::new(boxed)
                 });
@@ -226,6 +229,7 @@ unsafe fn get_or_create_box(
         let runtime_clone = runtime_ref.runtime.clone();
         let tokio_rt = runtime_ref.tokio_rt.clone();
         let queue = runtime_ref.queue.clone();
+        let liveness = Arc::clone(&runtime_ref.liveness);
         let user_data_addr = user_data as usize;
         let task_tokio_rt = tokio_rt.clone();
         let task_queue = queue.clone();
@@ -241,6 +245,7 @@ unsafe fn get_or_create_box(
                         box_id,
                         tokio_rt: task_tokio_rt,
                         queue: task_queue.clone(),
+                        liveness,
                     });
                     (crate::event_queue::OwnedFfiPtr::new(boxed), created)
                 });
@@ -320,6 +325,7 @@ unsafe fn attach_box(
         let runtime_clone = runtime_ref.runtime.clone();
         let tokio_rt = runtime_ref.tokio_rt.clone();
         let queue = runtime_ref.queue.clone();
+        let liveness = Arc::clone(&runtime_ref.liveness);
         let user_data_addr = user_data as usize;
         let task_tokio_rt = tokio_rt.clone();
         let task_queue = queue.clone();
@@ -333,6 +339,7 @@ unsafe fn attach_box(
                         box_id,
                         tokio_rt: task_tokio_rt,
                         queue: task_queue.clone(),
+                        liveness,
                     });
                     Ok(crate::event_queue::OwnedFfiPtr::new(boxed))
                 }

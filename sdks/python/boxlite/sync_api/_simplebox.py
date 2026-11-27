@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ..exec import ExecResult, _close_exec_stdin
 from ._agents import SyncAgents
+from ._mounts import SyncMountHandle
 
 if TYPE_CHECKING:
     from ..boxlite import TunnelOptions
@@ -52,6 +53,13 @@ class SyncSimpleBox:
             return self._box
 
         return SyncAgents(resolve)
+
+    @property
+    def mount(self) -> SyncMountHandle:
+        """Access the existing box's runtime mounts without starting it."""
+        if self._box is None:
+            raise RuntimeError("Box has not been created")
+        return self._box.mount
 
     def __init__(
         self,

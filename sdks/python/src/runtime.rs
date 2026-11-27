@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use boxlite::experimental::{ExperimentalFeatures, RuntimeBuilder};
 use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
 use pyo3::prelude::*;
 
@@ -20,11 +21,16 @@ pub(crate) struct PyBoxlite {
 #[pymethods]
 impl PyBoxlite {
     #[new]
-    fn new(options: PyOptions) -> PyResult<Self> {
+    #[pyo3(signature = (options, *, experimental_features = ""))]
+    fn new(options: PyOptions, experimental_features: &str) -> PyResult<Self> {
+        let features = ExperimentalFeatures::parse(experimental_features).map_err(map_err)?;
         let core_opts = options.into_core()?;
         // Executable-owned logging init (the library no longer auto-installs a subscriber).
         let _ = boxlite::init_logging_for(&core_opts.home_dir);
-        let runtime = BoxliteRuntime::new(core_opts).map_err(map_err)?;
+        let runtime = RuntimeBuilder::new(core_opts)
+            .with_features(features)
+            .build()
+            .map_err(map_err)?;
 
         Ok(Self {
             runtime: Arc::new(runtime),

@@ -263,6 +263,13 @@ const fn box_command_scope(name: &'static str, children: &'static [CommandScope]
     }
 }
 
+const MOUNT_SCOPES: &[CommandScope] = &[
+    box_command_scope("add", &[]),
+    box_command_scope("rm", &[]),
+    box_command_scope("ls", &[]),
+    box_command_scope("inspect", &[]),
+];
+
 const AGENT_SCOPES: &[CommandScope] = &[
     box_command_scope("create", &[]),
     box_command_scope("close", &[]),
@@ -417,6 +424,7 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         globals: BOX_GLOBALS,
         children: NETWORK_SCOPES,
     },
+    box_command_scope("mount", MOUNT_SCOPES),
     CommandScope {
         name: "ssh",
         globals: BOX_GLOBALS,
@@ -465,7 +473,9 @@ const COMMAND_SCOPES: &[CommandScope] = &[
 /// are folded explicitly because propagation selects one level's `MatchedArg`
 /// rather than appending values from independently defined levels.
 pub fn command() -> Command {
-    let command = Cli::command();
+    let mounts_enabled = experimental_features_from_env()
+        .is_ok_and(|features| features.is_enabled(ExperimentalFeature::NativeVmm));
+    let command = Cli::command().mut_subcommand("mount", |command| command.hide(!mounts_enabled));
     let global_args = command
         .get_arguments()
         .filter(|argument| argument.is_global_set())
@@ -827,6 +837,10 @@ pub enum Commands {
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
 
+    /// Manage runtime directory mounts
+    #[command(hide = true)]
+    Mount(crate::commands::mount::MountArgs),
+
     /// Connect to guest SSH using system OpenSSH
     ///
     /// With no operation option, generate or reuse CLI-managed client and host keys,
@@ -941,18 +955,18 @@ end"
 }
 
 fn completion_command() -> Command {
-    // clap_complete's AOT generators enumerate hidden arguments. Runtime,
-    // help, and scoped globals already share `command()`; this final projection
-    // removes only experimental arguments from completion discovery.
-    command()
+    // AOT generators enumerate hidden arguments and commands.
+    let command = command()
         .mut_subcommand("run", without_hidden_arguments)
-        .mut_subcommand("create", without_hidden_arguments)
+        .mut_subcommand("create", without_hidden_arguments);
+    without_hidden_arguments(command).version(env!("CARGO_PKG_VERSION"))
 }
 
 fn without_hidden_arguments(command: Command) -> Command {
     let name = match command.get_name() {
         "run" => "run",
         "create" => "create",
+        "boxlite" => "boxlite",
         other => panic!("completion projection is not defined for {other}"),
     };
     let about = command.get_about().cloned();
@@ -963,7 +977,11 @@ fn without_hidden_arguments(command: Command) -> Command {
         .filter(|argument| !argument.is_hide_set())
         .cloned()
         .collect::<Vec<_>>();
-    let subcommands = command.get_subcommands().cloned().collect::<Vec<_>>();
+    let subcommands = command
+        .get_subcommands()
+        .filter(|child| child.get_name() != "mount" || !child.is_hide_set())
+        .cloned()
+        .collect::<Vec<_>>();
 
     let mut projected = Command::new(name)
         .display_order(display_order)

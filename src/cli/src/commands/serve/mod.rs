@@ -27,6 +27,8 @@ use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
+#[cfg(test)]
+use boxlite::experimental::ExperimentalFeatures;
 use boxlite::runtime::options::{
     InboundNetworkConfig, MountSpec, NetworkMode, OutboundNetworkConfig, VolumeSpec,
 };
@@ -1596,7 +1598,9 @@ fn activity_box_id<'a>(method: &Method, path: &'a str) -> Option<&'a str> {
     if tail == "ssh" && matches!(*method, Method::GET | Method::HEAD | Method::DELETE) {
         return None;
     }
-    if tail == "executions" && matches!(*method, Method::GET | Method::HEAD) {
+    if matches!(tail, "executions" | "mounts" | "mounts/by-target")
+        && matches!(*method, Method::GET | Method::HEAD)
+    {
         return None;
     }
     Some(box_id)
@@ -1987,11 +1991,20 @@ async fn get_or_attach_main_session(
 
 fn build_router(state: Arc<AppState>) -> Router {
     use handlers::{
-        advanced, boxes, config, executions, files, images, me, metrics, network, snapshots, ssh,
-        volumes,
+        advanced, boxes, config, executions, files, images, me, metrics, mounts, network,
+        snapshots, ssh, volumes,
     };
 
     Router::new()
+        .route(
+            "/v1/boxes/{box_id}/mounts",
+            post(mounts::add).get(mounts::list),
+        )
+        .route(
+            "/v1/boxes/{box_id}/mounts/by-target",
+            get(mounts::get).delete(mounts::remove),
+        )
+        .route_layer(middleware::from_fn(mounts::require_enabled))
         // Web console: the page, its files, and browser sign-in
         .route("/", get(web_console::index))
         .route(
@@ -2193,7 +2206,8 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
     tokio::spawn(reaper_loop(Arc::clone(&state)));
 
     let guard = browser_guard::BrowserGuard::new(&args.host, &args.allowed_hosts);
-    let app = serve_app(state.clone(), guard);
+    let app = serve_app(state.clone(), guard)
+        .layer(axum::Extension(global.experimental_features().clone()));
     let listener = tokio::net::TcpListener::bind((args.host.as_str(), args.port)).await?;
     let addr = listener.local_addr()?;
     check_bound_addr(addr, args.api_key.as_deref())?;
@@ -2224,6 +2238,7 @@ mod tests {
     use std::time::Duration;
 
     mod executions;
+    mod mounts;
     mod ssh;
 
     #[test]
@@ -3318,6 +3333,12 @@ mod tests {
         assert_eq!(activity_box_id(&Method::GET, "/v1/boxes/abc/ssh"), None);
         assert_eq!(activity_box_id(&Method::DELETE, "/v1/boxes/abc/ssh"), None);
         assert_eq!(activity_box_id(&Method::HEAD, "/v1/boxes/abc/ssh"), None);
+
+        for path in ["/v1/boxes/abc/mounts", "/v1/boxes/abc/mounts/by-target"] {
+            assert_eq!(activity_box_id(&Method::GET, path), None);
+            assert_eq!(activity_box_id(&Method::HEAD, path), None);
+        }
+        assert_eq!(activity_box_id(&post, "/v1/boxes/abc/mounts"), Some("abc"));
 
         // Pollers must never hold a box open. A client watching `status` once a
         // second would otherwise reset the window before every sweep.

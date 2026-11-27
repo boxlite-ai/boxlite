@@ -258,6 +258,49 @@ await runtime.images.registries.remove(login.id)  # refused while a box pulls th
 
 See [the Python reference](../../docs/reference/python/README.md#boxliteregistryhandle).
 
+### Runtime directory mounts (release candidate)
+
+Directory mounts require a Linux x86_64 native Box and the `native-vmm` experimental feature.
+Reopen an existing Box after its creator releases the runtime home, or connect through REST when `boxlite serve` owns that home.
+The example also enables `custom-kernel` for a Box with a configured kernel; see [creating a native Box](../../docs/guides/native-vmm.md).
+
+```python
+from boxlite import Boxlite, MountRequest, Options
+
+runtime = Boxlite(Options(), experimental_features="native-vmm,custom-kernel")
+box = await runtime.get("dev")
+if box is None:
+    raise LookupError("native Box 'dev' was not found")
+
+mounted = await box.mount.add(
+    MountRequest(source="/srv/projects/demo", target="/workspace", read_only=True)
+)
+current = await box.mount.get("/workspace")  # None when absent
+mounts = await box.mount.list()
+await box.mount.remove("/workspace")
+```
+
+No mount operation starts the Box: `add` saves a stopped Box's mount for its next start and returns `configured`.
+On a running Box, `add` returns `mounted` after guest confirmation and commit.
+`get` and `list` include saved mounts; `remove` drops a saved declaration or lazily detaches a live mount, preserving open descriptors.
+Removing an absent target raises `NotFoundError`.
+
+`SyncBox.mount` provides the same four calls without `await`.
+Construct a local synchronous runtime with `SyncBoxlite(Options(), experimental_features="native-vmm,custom-kernel")`.
+`SimpleBox.mount` and `SyncSimpleBox.mount` forward to their existing Box and raise `RuntimeError` before that Box exists.
+For REST, enable the feature on the server; source paths refer to that server's filesystem.
+
+| `MountInfo.state` | Meaning |
+|-------------------|---------|
+| `configured` | Saved for the Box's next start |
+| `preparing` | Delivery has not been confirmed |
+| `mounted` | Visible in the container at the target path |
+| `detaching` | Removal is incomplete; repeat `remove` to finish it |
+
+Cancellation, a timeout, or a lost REST response does not guarantee rollback.
+Cancelling an await stops waiting; an admitted live operation can continue until completion or Box shutdown.
+Use `get` or `list` to inspect the committed state before retrying an uncertain add or removal.
+
 ### Remote BoxLite server (REST)
 
 Connect to a remote BoxLite server instead of the local runtime. Auth

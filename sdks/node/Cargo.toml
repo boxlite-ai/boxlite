@@ -27,6 +27,10 @@ futures = "0.3"
 # Logging
 tracing = "0.1"
 
+# Local directory mounts are implemented by the native backend on this target.
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+boxlite = { path = "../../src/boxlite", features = ["native"] }
+
 [dev-dependencies]
 boxlite = { path = "../../src/boxlite", features = ["test-support"] }
 

@@ -43,6 +43,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite ssh`](#boxlite-ssh)
   - [`boxlite agent`](#boxlite-agent)
   - [`boxlite serve`](#boxlite-serve)
+  - [`boxlite mount`](#boxlite-mount)
   - [`boxlite volume`](#boxlite-volume)
   - [`boxlite domain`](#boxlite-domain)
   - [`boxlite completion`](#boxlite-completion)
@@ -178,7 +179,7 @@ Commands without shared options omit the global section.
 | `OIDC_CLIENT_ID` | `auth login` | OIDC client-id fallback after an explicit flag and server discovery |
 | `OIDC_AUDIENCE` | `auth login` | OIDC audience fallback after an explicit flag and server discovery |
 | `BOXLITE_LOG_FILE` | logging | Explicit JSON log-file path for any command; a bare filename is relative to the current directory. `serve` otherwise logs to `<BOXLITE_HOME>/logs/serve.log`. |
-| `BOXLITE_EXPERIMENTAL` | `run`, `create` | Comma-separated RC features: `custom-kernel`, `nested-virtualization`, `native-vmm` |
+| `BOXLITE_EXPERIMENTAL` | `run`, `create`, `mount`, `serve` | Comma-separated RC features: `custom-kernel`, `nested-virtualization`, `native-vmm`; mounts require `native-vmm` |
 | `BOXLITE_RECONNECT_GRACE` | `serve` | Reconnect grace before SIGHUP; default `5m` |
 | `BOXLITE_SHUTDOWN_GRACE` | `serve` | Grace between shutdown escalation stages; default `30s` |
 | `BOXLITE_MAX_SESSION_LIFETIME` | `serve` | Session hard cap; default `24h` |
@@ -1183,6 +1184,39 @@ boxlite serve
 boxlite serve --port 9000
 BOXLITE_SERVE_API_KEY="$KEY" boxlite serve --host 0.0.0.0
 ```
+
+---
+
+### `boxlite mount`
+
+**Synopsis:** `boxlite mount <add|rm|ls|inspect> BOX [OPTIONS]`
+
+Manage directory mounts on a Linux x86_64 native Box with
+`BOXLITE_EXPERIMENTAL=native-vmm`. The command is hidden from help and
+completion until opted in.
+
+```bash
+export BOXLITE_EXPERIMENTAL=native-vmm,custom-kernel
+boxlite mount add mybox --source /srv/project --box-path /work --read-only
+boxlite mount ls mybox --format json
+boxlite mount inspect mybox --box-path /work --format json
+boxlite mount rm mybox --box-path /work
+```
+
+`add` requires `--source HOST_DIR` and `--box-path CONTAINER_PATH`; its default
+mode is writable. `rm` and `inspect` require `--box-path`. `ls` and `inspect`
+accept `--format table|json|yaml` (default `table`). JSON inspection of a missing
+target returns `null`; removal of a missing target fails with `NotFound`.
+
+All four operations leave a stopped Box stopped. An add saves `configured` for
+its next start; a running add returns `mounted` after guest confirmation.
+Other current-run progress is `preparing` or `detaching`. Removal drops the
+declaration and, on a running Box, lazily detaches the directory while keeping
+open references usable.
+
+Local and `--url` connections use the same commands. For REST, `--source`
+names a directory on the server host, whose runtime must enable `native-vmm`.
+See the [CLI example](../../../src/cli/README.md#runtime-directory-mounts-release-candidate).
 
 ---
 

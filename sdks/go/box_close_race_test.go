@@ -96,6 +96,8 @@ func TestBoxMethodsAfterCloseReturnInvalidState(t *testing.T) {
 	}
 
 	ctx := context.Background()
+	mount := box.Mount()
+	request := MountRequest{Source: "/host/source", Target: "/workspace"}
 	checks := map[string]func() error{
 		"Metrics":        func() error { _, err := box.Metrics(ctx); return err },
 		"Info":           func() error { _, err := box.Info(ctx); return err },
@@ -110,6 +112,10 @@ func TestBoxMethodsAfterCloseReturnInvalidState(t *testing.T) {
 		"CopyOut":        func() error { return box.CopyOut(ctx, "/src", "/tmp/dst") },
 		"CopyOutStream":  func() error { return box.CopyOutStream(ctx, "/src", io.Discard) },
 		"CopyInStream":   func() error { return box.CopyInStream(ctx, "/dst", strings.NewReader("x")) },
+		"MountAdd":       func() error { _, err := mount.Add(ctx, request); return err },
+		"MountRemove":    func() error { return mount.Remove(ctx, request.Target) },
+		"MountList":      func() error { _, err := mount.List(ctx); return err },
+		"MountGet":       func() error { _, err := mount.Get(ctx, request.Target); return err },
 	}
 	for name, call := range checks {
 		if err := call(); !IsInvalidState(err) {

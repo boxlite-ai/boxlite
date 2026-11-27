@@ -213,6 +213,7 @@ unsafe fn import_box(
         let runtime = runtime_ref.runtime.clone();
         let tokio_rt = runtime_ref.tokio_rt.clone();
         let queue = runtime_ref.queue.clone();
+        let liveness = Arc::clone(&runtime_ref.liveness);
         let box_tokio_rt = tokio_rt.clone();
         let task_tokio_rt = tokio_rt.clone();
         let box_queue = queue.clone();
@@ -231,6 +232,7 @@ unsafe fn import_box(
                     box_id,
                     tokio_rt: box_tokio_rt,
                     queue: box_queue,
+                    liveness,
                 }))
             });
             push_event(
@@ -273,7 +275,7 @@ unsafe fn parse_optional_name(value: *const c_char) -> Result<Option<String>, Bo
     }
 }
 
-unsafe fn parse_required_string(
+pub(crate) unsafe fn parse_required_string(
     value: *const c_char,
     parameter: &str,
 ) -> Result<String, BoxliteError> {

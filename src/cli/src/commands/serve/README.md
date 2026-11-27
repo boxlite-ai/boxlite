@@ -184,6 +184,43 @@ Without a key the console opens directly, like the API itself.
 | POST   | `/v1/boxes/{box_id}/start`    | `boxes::start_box`   | Start a stopped box           |
 | POST   | `/v1/boxes/{box_id}/stop`     | `boxes::stop_box`    | Stop a running box            |
 
+### Runtime directory mounts
+
+On Linux x86_64, enable `BOXLITE_EXPERIMENTAL=native-vmm`:
+
+```sh
+BOXLITE_EXPERIMENTAL=native-vmm boxlite serve
+```
+
+| Method | Path under `/v1/boxes/{box_id}` | Result |
+| --- | --- | --- |
+| POST | `/mounts` | `201` with mount details |
+| GET | `/mounts` | `200 {"mounts": [...]}` |
+| GET | `/mounts/by-target?target=...` | `200` with details or `null` |
+| DELETE | `/mounts/by-target?target=...` | `204`; an absent target is `404` |
+
+POST accepts `source`, `target`, and optional `read_only` (default `false`).
+The source is a directory on the server host. For example, add
+`{"source":"/srv/projects/demo","target":"/workspace","read_only":true}`.
+All routes use the server's existing authentication and browser guard.
+`GET /v1/config` advertises `runtime_mounts_enabled` when the feature is enabled.
+
+A stopped box saves the declaration and returns state `configured`; its next
+start delivers the directory. A running box returns `mounted` after guest
+confirmation and commit. Queries can also report `preparing` or `detaching`.
+Queries and changes never start a box. Removal lazily detaches a live mount,
+preserving existing open descriptors, or drops a stopped box's declaration.
+
+The server delegates to `MountHandle` with the supplied host path. Callers must
+be trusted to choose host directories readable by the server process. Saved
+declarations reopen their source on each start under the runtime's existing
+mount contract; a missing source reports its container target.
+
+The request's target identifies the mount. A missing box returns `404`, an
+absent target returns `200 null`, and a server without this capability reports
+`unsupported`. A cancelled wait does not undo an accepted mount change.
+
+
 ### Guest SSH
 
 | Method | Path                       | Handler              | Description                                  |

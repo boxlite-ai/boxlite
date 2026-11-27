@@ -527,6 +527,31 @@ BoxliteErrorCode boxlite_runtime_metrics(
 void boxlite_runtime_free(CBoxliteRuntime* runtime);
 ```
 
+#### Runtime directory mounts (release candidate)
+
+Call `boxlite_box_mount_add`, `boxlite_box_mount_remove`, `boxlite_box_mount_list`,
+or `boxlite_box_mount_get` on a native Box. For a local Box with a custom
+kernel, pass `"native-vmm,custom-kernel"` to `boxlite_runtime_new_experimental`.
+REST sources refer to directories on the server host and require a server grant.
+
+Drain the runtime to receive the `CBoxMountCb` result. Add returns the mount for that
+operation and list returns an array. Get returns JSON `null` for an absent target;
+successful removal also returns JSON `null`, while removing an absent target fails.
+A failed call delivers a NULL JSON pointer and the typed error; success delivers
+JSON and a NULL error pointer. Both pointers are borrowed until the callback returns.
+Copy contents you need later. A NULL callback, NULL input string, or invalid UTF-8
+returns `InvalidArgument` without a callback. Mount calls on a retained Box handle
+return `Stopped` synchronously after runtime shutdown or closure.
+
+For example, adding `/srv/projects/demo` at `/workspace` with `read_only=true` returns
+the source, target, `read_only`, and `state` fields. The four states are `configured`,
+`preparing`, `mounted`, and `detaching`. A stopped Box saves an added mount as
+`configured` for its next start; a running Box confirms `mounted` before add succeeds.
+Remove lazily detaches a running mount or discards a stopped Box's saved mount.
+These calls never start a Box. Ending a caller's wait does not cancel an admitted
+operation; use get or list to inspect its result, and keep callback user data valid
+until completion is delivered or the runtime is freed.
+
 #### Box Lifecycle
 
 Nested virtualization is a creation option:

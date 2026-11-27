@@ -1,10 +1,14 @@
 //! Configuration discovery endpoint.
 
-use axum::Json;
+use axum::{Extension, Json};
+
+use boxlite::experimental::ExperimentalFeatures;
 
 use super::super::types::{ServerCapabilities, ServerConfig};
 
-pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
+pub(in crate::commands::serve) async fn get_config(
+    features: Option<Extension<ExperimentalFeatures>>,
+) -> Json<ServerConfig> {
     Json(ServerConfig {
         capabilities: ServerCapabilities {
             checkpoints_enabled: false,
@@ -18,6 +22,8 @@ pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
             exec_user_enabled: true,
             volume_read_only_enabled: true,
             typed_mounts_enabled: true,
+            runtime_mounts_enabled: features
+                .is_some_and(|features| super::mounts::enabled(&features.0)),
         },
     })
 }
@@ -30,18 +36,19 @@ mod tests {
     /// supports the field must advertise it, or clients refuse to send users.
     #[tokio::test]
     async fn config_advertises_exec_user() {
-        assert!(get_config().await.0.capabilities.exec_user_enabled);
+        assert!(get_config(None).await.0.capabilities.exec_user_enabled);
     }
 
     #[tokio::test]
     async fn config_does_not_advertise_local_checkpoints() {
-        assert!(!get_config().await.0.capabilities.checkpoints_enabled);
-        assert!(!get_config().await.0.capabilities.memory_checkpoints_enabled);
+        let capabilities = get_config(None).await.0.capabilities;
+        assert!(!capabilities.checkpoints_enabled);
+        assert!(!capabilities.memory_checkpoints_enabled);
     }
 
     #[tokio::test]
     async fn config_advertises_volume_mount_support() {
-        let capabilities = get_config().await.0.capabilities;
+        let capabilities = get_config(None).await.0.capabilities;
         assert!(capabilities.volume_read_only_enabled);
         assert!(capabilities.typed_mounts_enabled);
     }

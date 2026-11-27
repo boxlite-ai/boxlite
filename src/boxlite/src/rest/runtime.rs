@@ -698,6 +698,8 @@ mod tests {
     use super::*;
     use crate::runtime::options::{PortProtocol, PortSpec};
 
+    mod runtime_mounts;
+
     #[test]
     fn remote_runtime_rejects_host_port_publication_with_tunnel_guidance() {
         let options = BoxOptions {

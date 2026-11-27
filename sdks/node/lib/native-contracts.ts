@@ -643,6 +643,37 @@ export interface JsSshHandle {
   disable(): Promise<JsSshStatus>;
 }
 
+export interface MountRequest {
+  source: string;
+  target: string;
+  readOnly?: boolean;
+}
+
+/**
+ * `configured` is saved for the box's next start, `preparing` is not yet
+ * confirmed by the guest, `mounted` is visible in the container and
+ * `detaching` is being removed.
+ */
+export type MountState = "configured" | "preparing" | "mounted" | "detaching";
+
+export interface MountInfo {
+  source: string;
+  target: string;
+  readOnly: boolean;
+  state: MountState;
+}
+
+/** Runtime directory mounts of one box, reached as `box.mount`. */
+export interface MountHandle {
+  /** Deliver a directory; a stopped box saves it for its next start. */
+  add(request: MountRequest): Promise<MountInfo>;
+  /** Fails with code `not_found` when no mount is at `target`. */
+  remove(target: string): Promise<void>;
+  list(): Promise<MountInfo[]>;
+  /** The mount at `target`, or `null` when no mount is there. */
+  get(target: string): Promise<MountInfo | null>;
+}
+
 export interface JsNetworkHandle {
   updateInbound(spec: {
     mode: "enabled" | "disabled";
@@ -763,6 +794,7 @@ export interface JsBox {
   readonly snapshot: JsSnapshotHandle;
   readonly network: JsNetworkHandle;
   readonly ssh: JsSshHandle;
+  readonly mount: MountHandle;
   cloneBox(
     options?: JsCloneOptions | null,
     name?: string | null,
@@ -820,7 +852,7 @@ export interface JsBoxlite {
 }
 
 export interface JsBoxliteConstructor {
-  new (options: JsOptions): JsBoxlite;
+  new (options: JsOptions, experimentalFeatures?: string): JsBoxlite;
   withDefaultConfig(): JsBoxlite;
   initDefault(options: JsOptions): void;
   /** Connect to a remote BoxLite REST server. Takes the native

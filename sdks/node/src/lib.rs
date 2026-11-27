@@ -16,6 +16,7 @@ mod executions;
 mod images;
 mod info;
 mod metrics;
+mod mounts;
 mod network;
 mod options;
 mod registries;
@@ -43,6 +44,7 @@ pub use info::{
     JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus, JsNetworkInfo, JsPublishedPort,
 };
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
+pub use mounts::{JsMountHandle, JsMountInfo, JsMountRequest};
 pub use network::{
     JsBoxConnection, JsBoxTunnel, JsNetworkHandle, JsSocketAddress, JsTunnelForwarder,
 };
