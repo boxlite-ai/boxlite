@@ -8,7 +8,7 @@ Select a single `publish-*` command to rehearse its actual matrix and publicatio
 
 On `codex/shadow-release-3069-v2`, the `mbuild-release` rehearsal simulates builds, uploads, publication, cloud deployment and E2E. The dev preparation job simulates digest verification and produces the synthetic deployment candidate before requesting approval. Its identity and the subsequent acceptance receipt travel through job outputs inside the run. The rehearsal uses the release workflow’s callable build jobs, platform and Node version matrices, job dependencies and step order. Its concurrency groups are exclusive to shadow.
 
-After the simulated attachment succeeds, the rehearsal runs the npm, PyPI and Go tag jobs, followed by GitHub Release publication and the crates.io job. Each publisher uses the same condition as the release workflow.
+After simulated attachment, npm and PyPI lead to simulated GitHub Release publication. Go then simulates checking the public C SDK downloads and pushing the module tag, in parallel with simulated crates.io publication. Each publisher uses the same condition as the release workflow.
 
 Dev and prod approvals use the existing GitHub Environment reviewer rules with `deployment: false`; the approval job has an empty token permission set. The workflow requests no cloud identity. GitHub records the run and approvals, and the configured release Slack webhook receives messages marked `[SHADOW]`.
 
@@ -30,8 +30,8 @@ The run creates the draft or selects the existing draft for that tag. Configure 
 | Build | Runtime and CLI, wheels, npm packages and C SDK archives build in parallel and enter Actions Artifacts. Go tests and the Linux Runner build link the C archives from this run. |
 | Prepare dev | `mbuild publish` pushes the declared images to GHCR. The Runner job uploads the original tarball as an OCI layer. As soon as these digests are verified, dev can start while SDK tests and distribution packaging continue. |
 | Dev approval and E2E | Approve the dev Environment in the run. The cloud suite reads only the Linux x64 CLI, Python wheel, C SDK and two npm tarballs from this run. It records their checksums with the accepted deployment digests. |
-| Publish | Dev E2E success opens prod approval immediately. In parallel, publication waits for the complete distribution and Go tests, compares the tested client bytes, and attaches the verified files to the draft. The top-level PyPI and npm jobs publish the accepted packages and the Go job tags the tested commit. |
-| Release and prod | When those publishers succeed, the workflow marks the draft public. Rust crates publish after the runtime becomes public. Approved prod deployment uses the same GHCR digests and can finish while the release is still a draft. |
+| Publish | Dev E2E success opens prod approval immediately. In parallel, publication waits for the complete distribution and Go tests, compares the tested client bytes, and attaches the verified files to the draft. The top-level PyPI and npm jobs publish the accepted packages. |
+| Release and prod | When those publishers succeed, the workflow marks the draft public. Rust crates and Go tagging follow publication of the GitHub Release. Approved prod deployment uses the same GHCR digests and can finish while the release is still a draft. |
 
 The Runner package at `ghcr.io/boxlite-ai/boxlite/runner` must allow anonymous pulls from hosts. First boot and in-place upgrade verify the OCI manifest against the release tag, source commit and archive digest before extracting the binary. Dev and prod receive those pins from the candidate. A version-only manual rollout reads the same pins from the published `release-candidate.json`.
 

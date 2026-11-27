@@ -28,7 +28,7 @@ PRODUCT RELEASE (dispatch from main)    mbuild-release creates or selects the dr
                                                                                   └─▶ dev E2E with Linux clients
                                                                                           ├─▶ prod approval + deployment
                                    complete distribution + Go tests + successful dev E2E ─┴─▶ attach files
-                                         ──▶ PyPI, npm and Go tag ──▶ publish GitHub Release ──▶ crates.io
+                                         ──▶ PyPI and npm ──▶ publish GitHub Release ──▶ crates.io and verified Go tag
 
 SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go SDK tests
                                         build-runner-binary ──▶ build-c ──▶ Runner link
@@ -87,7 +87,7 @@ Set `TAG` to the existing stable version tag and start the product release from 
 gh workflow run mbuild-release.yml --ref main -f tag="$TAG"
 ```
 
-The parent creates or selects the draft, gathers the build outputs in Actions Artifacts and requests dev approval. Successful dev E2E allows the attachment job to upload the verified files. Once the attachments, PyPI, npm and Go tag jobs succeed, the parent makes the Release public.
+The parent creates or selects the draft, gathers the build outputs in Actions Artifacts and requests dev approval. Successful dev E2E allows the attachment job to upload the verified files. Once the attachments, PyPI and npm jobs succeed, the parent makes the Release public. Go tagging then checks anonymous downloads of the C SDK archives.
 
 The prod Environment requires reviewers. The optional prod Slack message includes the dev E2E result and the approval link. See the [release runbook](../../apps/infra/docs/release.md) for package publisher setup and retry behavior.
 
@@ -404,7 +404,7 @@ path requires a published release for the current `Cargo.toml` version.
 
 For a product release, `mbuild-release.yml` calls `build-c.yml` once. The Go test matrix downloads the archive for each target, and the release Runner build links the Linux x64 archive from the same run. A C build failure blocks both consumers.
 
-The parent publishes the Go module tag after dev acceptance and attachment. Before creating the tag it checks that the remote product tag still points to the tested commit.
+Before publishing the Go module tag, the parent verifies the public C SDK downloads for every build target and checks that the remote product tag still points to the tested commit.
 
 ## Adding a stage
 

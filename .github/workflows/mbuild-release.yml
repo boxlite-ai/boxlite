@@ -463,19 +463,22 @@ jobs:
       queue: max
   tag-go-module:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !cancelled() && ((inputs.command == 'publish' && needs.attach.result ==
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !cancelled() && ((inputs.command == 'publish' && needs.finalize.result ==
       'success') || (inputs.command == 'publish-go' && !inputs['build-only'] && needs.build-go.result == 'success')) }}
     name: Tag Go Module
     needs:
       - resolve
-      - attach
+      - finalize
       - build-go
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     steps:
-      - name: actions/checkout@v4
+      - name: actions/checkout@v5
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Verify public C SDK downloads
         shell: bash
         run: printf '%s\n' 'Simulated'
       - name: Create Go module tag
@@ -529,7 +532,7 @@ jobs:
   finalize:
     if: >-
       ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !cancelled() && needs.npm.result ==
-      'success' && needs.pypi.result == 'success' && needs.tag-go-module.result == 'success' }}
+      'success' && needs.pypi.result == 'success' && needs.attach.result == 'success' }}
     name: Publish the verified GitHub Release
     needs:
       - resolve
@@ -537,7 +540,6 @@ jobs:
       - attach
       - pypi
       - npm
-      - tag-go-module
     runs-on: ubuntu-latest
     permissions:
       contents: read
