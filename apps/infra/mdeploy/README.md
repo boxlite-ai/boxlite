@@ -34,11 +34,14 @@ AWS bootstrap and mdeploy currently use different app names; read the
 | Cloud, region/project, registry and resource sizing | Ignored `.mstage.config.json`                                       |
 | Domains, fleet count, secrets and feature settings  | Encrypted stage environment                                         |
 | Container identity                                  | Invocation's `BOXLITE_IMAGE_TAG`                                    |
-| Runner release                                      | Workspace `Cargo.toml`, or invocation's `VERSION`                   |
+| Runner release                                      | Invocation's `VERSION`, else the workspace `Cargo.toml`              |
 | Runner commit build                                 | `RUNNER_ARTIFACT_SOURCE=build` and `RUNNER_ARTIFACT_REF=<full-sha>` |
 
 See [configuration](../docs/configuration.md) for writing and verifying each input.
 `BOXLITE_IMAGE_TAG` accepts a full lowercase SHA or `vX.Y.Z-<sha>` for release images.
+`VERSION` names a published release directly and resolves with no `Cargo.toml` above the config
+directory, so an external app declaration can pin a release outside this checkout; omitting it
+reads the workspace `Cargo.toml` instead.
 The environment describes the desired deployment; setting a tag does not build an artifact.
 Use [mbuild](../mbuild/README.md) and the [runner runbook](../docs/runners.md) to prepare it first.
 
