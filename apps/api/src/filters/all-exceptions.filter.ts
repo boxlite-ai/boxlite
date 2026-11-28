@@ -42,7 +42,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const ctx = host.switchToHttp()
     const response = ctx.getResponse<Response>()
     const request = ctx.getRequest<Request>()
-    const isAdminApi = /^\/(?:api\/)?v1\/organizations(?:\/|$)/.test(request.path)
+    // Express routes ignore case, so path classification lowercases once.
+    const path = request.path.toLowerCase()
+    const isAdminApi = /^\/(?:api\/)?v1\/organizations(?:\/|$)/.test(path)
 
     let statusCode: number
     let error: string
@@ -56,9 +58,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     // A NotFoundException outside the API serves the dashboard, which routes on
     // the client. `/.well-known/` documents are machine-read (RFC 9728 metadata,
-    // for one), so a missing one stays a 404 rather than a 200 HTML page. Express
-    // routes ignore case, so the check does too.
-    const path = request.path.toLowerCase()
+    // for one), so a missing one stays a 404 rather than a 200 HTML page.
     const servesDashboard = !path.startsWith('/api/') && !path.startsWith('/.well-known/')
     if (exception instanceof NotFoundException && servesDashboard && !isAdminApi) {
       const response = ctx.getResponse()
