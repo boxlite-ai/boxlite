@@ -8,7 +8,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiClient } from '@/api/apiClient'
+import * as cloudBox from '@/lib/cloudBox'
 import type { DashboardConfig } from '@/types/DashboardConfig'
+import { AxiosError, AxiosHeaders } from 'axios'
 import { getBoxesQueryKey } from '../useBoxes'
 import { useCreateBoxMutation } from './useCreateBoxMutation'
 
@@ -20,6 +22,16 @@ vi.mock('../useApi', () => ({ useApi: () => context.api }))
 vi.mock('../useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({ selectedOrganization: context.organization }),
 }))
+
+function axiosFailure(status: number, boxId: string): AxiosError {
+  return new AxiosError(`Request failed with status code ${status}`, String(status), undefined, undefined, {
+    status,
+    data: { boxId },
+    statusText: '',
+    headers: {},
+    config: { headers: new AxiosHeaders() },
+  })
+}
 
 describe('useCreateBoxMutation startup timeout recovery', () => {
   let server: Server
@@ -77,6 +89,7 @@ describe('useCreateBoxMutation startup timeout recovery', () => {
   afterEach(() => {
     act(() => root.unmount())
     client.clear()
+    vi.restoreAllMocks()
   })
 
   async function submit() {
@@ -142,6 +155,26 @@ describe('useCreateBoxMutation startup timeout recovery', () => {
     await expect(submit()).rejects.toThrow('Box unavailable')
     expect(requests.map(({ method }) => method)).toEqual(['POST', 'GET'])
     expect(client.getQueryState(getBoxesQueryKey('org-1'))?.isInvalidated).toBe(false)
+  })
+
+  it('recovers a raw Axios 408 through the returned Box ID', async () => {
+    const create = vi.spyOn(cloudBox, 'createBoxViaBoxApi').mockRejectedValueOnce(axiosFailure(408, 'box-1'))
+
+    await expect(submit()).resolves.toEqual(box)
+
+    expect(create).toHaveBeenCalledOnce()
+    expect(requests.map(({ method, url }) => [method, url])).toEqual([['GET', '/api/box/box-1']])
+  })
+
+  it.each([
+    ['a raw Axios non-408 response', axiosFailure(409, 'box-1')],
+    ['a non-Axios failure', new Error('Connection closed')],
+  ])('preserves %s without a follow-up read', async (_name, error) => {
+    vi.spyOn(cloudBox, 'createBoxViaBoxApi').mockRejectedValueOnce(error)
+
+    await expect(submit()).rejects.toBe(error)
+
+    expect(requests).toEqual([])
   })
 
   it('sends no request without an organization', async () => {
