@@ -38,6 +38,10 @@ use super::types::{
     SnapshotResponse,
 };
 
+#[cfg(test)]
+#[path = "tests/file_upload.rs"]
+mod file_upload_tests;
+
 /// REST-backed box handle.
 ///
 /// Holds immutable identity for synchronous accessors and delegates operations,
@@ -101,9 +105,23 @@ impl RestBox {
         stream: boxlite_shared::BoxByteStream,
         container_dst: &str,
     ) -> BoxliteResult<()> {
-        let body = reqwest::Body::wrap_stream(stream.map(|r| r.map(bytes::Bytes::from)));
         let encoded_dst = urlencoding::encode(container_dst);
+        let ws_enabled = match self.client.get_config().await {
+            Ok(config) => {
+                config
+                    .capabilities
+                    .and_then(|caps| caps.file_upload_ws_enabled)
+                    == Some(true)
+            }
+            Err(BoxliteError::NotFound(_)) => false,
+            Err(error) => return Err(error),
+        };
+        if ws_enabled {
+            let path = format!("/boxes/{}/files/ws?path={encoded_dst}", self.id);
+            return super::file_upload::upload(&self.client, &path, stream).await;
+        }
         let path = format!("/boxes/{}/files?path={}", self.box_id_str(), encoded_dst);
+        let body = reqwest::Body::wrap_stream(stream.map(|r| r.map(bytes::Bytes::from)));
         let resp = self
             .client
             .authorized_request(Method::PUT, &path)
@@ -115,6 +133,11 @@ impl RestBox {
             .map_err(transport_error)?;
         if !resp.status().is_success() {
             let status = resp.status();
+            if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+                return Err(BoxliteError::ResourceExhausted(
+                    "upload request exceeds the server's size limit (HTTP 413)".into(),
+                ));
+            }
             let text = resp.text().await.unwrap_or_default();
             return Err(map_http_body(status, &text));
         }
@@ -1958,7 +1981,7 @@ mod tests {
     /// Read the first HTTP request line + headers off a freshly accepted TCP
     /// stream. Returns the raw bytes consumed (so the WS upgrade can resume
     /// from where we left off if needed) and a parsed view of the request.
-    async fn read_request_head(stream: &mut TcpStream) -> Vec<u8> {
+    pub(super) async fn read_request_head(stream: &mut TcpStream) -> Vec<u8> {
         let mut buf = Vec::with_capacity(1024);
         let mut tmp = [0u8; 512];
         loop {
@@ -1987,7 +2010,7 @@ mod tests {
     /// A `RestBox` for `box_id`, pointed at the in-process server. The
     /// `BoxInfo` comes out of the production wire decoder rather than a
     /// hand-rolled literal.
-    fn rest_box_for(port: u16, box_id: &str) -> RestBox {
+    pub(super) fn rest_box_for(port: u16, box_id: &str) -> RestBox {
         let body = format!(
             r#"{{"box_id":"{box_id}","name":null,"status":"running",
                  "created_at":"2026-07-14T00:00:00Z",
@@ -4017,12 +4040,23 @@ mod tests {
             r#""/tmp/x is under the container's '/tmp' mount, which file transfer cannot reach"}}"#
         );
 
-        for _ in 0..requests {
+        let mut served = 0;
+        while served < requests {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut head = Vec::new();
             while !head.ends_with(b"\r\n\r\n") {
                 head.push(stream.read_u8().await.unwrap());
             }
+            if head.starts_with(b"GET /v1/config ") {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+                continue;
+            }
+            served += 1;
             let content_length = String::from_utf8_lossy(&head)
                 .to_lowercase()
                 .lines()

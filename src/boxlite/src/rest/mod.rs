@@ -9,6 +9,7 @@ pub(crate) mod client;
 pub mod credential;
 pub(crate) mod error;
 mod exec;
+mod file_upload;
 pub(crate) mod litebox;
 pub mod options;
 pub(crate) mod runtime;

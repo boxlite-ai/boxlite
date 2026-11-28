@@ -21,6 +21,7 @@ import { AnalyticsService } from './analytics/services/analytics.service'
 import { HttpsOptions } from '@nestjs/common/interfaces/external/https-options.interface'
 import { TypedConfigService } from './config/typed-config.service'
 import { FailedAuthTrackerService } from './auth/failed-auth-tracker.service'
+import { FailedAuthRateLimitMiddleware } from './common/middleware/failed-auth-rate-limit.middleware'
 import { DataSource, MigrationExecutor } from 'typeorm'
 import { getOpenApiConfig } from './openapi.config'
 import { AuditInterceptor } from './audit/interceptors/audit.interceptor'
@@ -32,7 +33,7 @@ import { MicroserviceOptions, Transport } from '@nestjs/microservices'
 import { Partitioners } from 'kafkajs'
 import { isApiEnabled, isWorkerEnabled } from './common/utils/app-mode'
 import cluster from 'node:cluster'
-import type { IncomingMessage } from 'http'
+import { ServerResponse, type IncomingMessage } from 'node:http'
 import type { Socket } from 'net'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
@@ -229,7 +230,7 @@ async function bootstrap() {
     // body deadline. Node exposes this setting only at the server level.
     httpServer.requestTimeout = 0
 
-    // WebSocket upgrade routing for the BoxLite REST `/attach` endpoint.
+    // WebSocket upgrade routing for the BoxLite REST endpoints.
     // NestJS controllers only fire on Express's `request` event; WS upgrades
     // arrive as `upgrade` events on the underlying Node http server and
     // bypass middleware/guards. http-proxy-middleware's `ws: true` per-request
@@ -244,7 +245,20 @@ async function bootstrap() {
     // paths fall through to socket.io rather than destroying the socket out
     // from under it; everything else is unauthenticated traffic and gets
     // closed here.
+    const failedAuthLimit = app.get(FailedAuthRateLimitMiddleware)
+    const expressRequest = app.getHttpAdapter().getInstance().request
     httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+      if (wsProxy.matchesUploadPath(req.url)) {
+        // Resolve the address with the same Express trust-proxy policy as HTTP requests.
+        const request = Object.assign(Object.create(expressRequest), { headers: req.headers, socket })
+        const response = new ServerResponse(req)
+        void wsProxy.upgradeUpload(req, socket, head, {
+          check: () => failedAuthLimit.use(request, response, () => undefined),
+          trackFailure: () => failedAuthTracker.incrementFailedAuth(request, response),
+          headers: () => response.getHeaders(),
+        })
+        return
+      }
       if (wsProxy.matchAttachPath(req.url)) {
         void wsProxy.upgrade(req, socket, head)
         return

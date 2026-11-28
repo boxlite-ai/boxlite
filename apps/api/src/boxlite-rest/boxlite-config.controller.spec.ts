@@ -27,6 +27,21 @@ function createConfig(values: {
   } as TypedConfigService
 }
 
+it.each([
+  [undefined, true],
+  ['false', false],
+])('advertises file upload capability with override %s', (value, enabled) => {
+  const environment = { ...process.env }
+  if (value === undefined) delete environment.BOXLITE_FILE_UPLOAD_WS_ENABLED
+  else environment.BOXLITE_FILE_UPLOAD_WS_ENABLED = value
+  const env = jest.replaceProperty(process, 'env', environment)
+  try {
+    expect(new BoxliteConfigController().getConfig().capabilities.file_upload_ws_enabled).toBe(enabled)
+  } finally {
+    env.restore()
+  }
+})
+
 describe('checkpoint capability discovery', () => {
   it.each([
     { archivePrefix: undefined, enabled: true, expected: false },

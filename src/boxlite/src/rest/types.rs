@@ -97,6 +97,7 @@ pub(crate) struct ServerConfig {
 #[allow(dead_code)] // Constructed via serde::Deserialize
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct ServerCapabilities {
+    pub file_upload_ws_enabled: Option<bool>,
     pub privileged_enabled: Option<bool>,
     pub linux_capabilities_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,

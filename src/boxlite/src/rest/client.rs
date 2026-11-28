@@ -104,6 +104,8 @@ fn public_tunnel_default() -> bool {
 /// stalled connect blocks the attach caller indefinitely — unlike HTTP calls,
 /// which ride the reqwest client's own timeout.
 const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+// Upload admission can wait for the box to stop and start before sending 101.
+const WS_UPLOAD_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(150);
 
 /// An upgraded attach WebSocket.
 pub(crate) type WsStream =
@@ -588,6 +590,14 @@ impl ApiClient {
         &self,
         path: &str,
     ) -> BoxliteResult<(WsStream, WsHandshakeResponse)> {
+        self.connect_ws_upgrade(path, None).await
+    }
+
+    pub(crate) async fn connect_ws_upgrade(
+        &self,
+        path: &str,
+        protocol: Option<&'static str>,
+    ) -> BoxliteResult<(WsStream, WsHandshakeResponse)> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         use tokio_tungstenite::tungstenite::http::HeaderValue;
 
@@ -609,6 +619,11 @@ impl ApiClient {
             .map_err(|e| BoxliteError::Internal(format!("WS request build failed: {}", e)))?;
 
         request.headers_mut().extend(client_identity_headers());
+        if let Some(protocol) = protocol {
+            request
+                .headers_mut()
+                .insert("Sec-WebSocket-Protocol", HeaderValue::from_static(protocol));
+        }
 
         if let Some(bearer) = self.current_bearer().await? {
             let value = HeaderValue::from_str(&format!("Bearer {}", bearer))
@@ -616,18 +631,45 @@ impl ApiClient {
             request.headers_mut().insert("Authorization", value);
         }
 
+        let timeout = if protocol.is_some() {
+            WS_UPLOAD_HANDSHAKE_TIMEOUT
+        } else {
+            WS_HANDSHAKE_TIMEOUT
+        };
         tokio::time::timeout(
-            WS_HANDSHAKE_TIMEOUT,
-            tokio_tungstenite::connect_async(request),
+            timeout,
+            tokio_tungstenite::connect_async_with_config(
+                request,
+                protocol.map(|_| {
+                    let mut config =
+                        tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
+                    config.max_message_size = Some(32 * 1024);
+                    config.max_frame_size = config.max_message_size;
+                    config
+                }),
+                false,
+            ),
         )
         .await
         .map_err(|_| {
             BoxliteError::Network(format!(
                 "WebSocket handshake timed out after {}s",
-                WS_HANDSHAKE_TIMEOUT.as_secs()
+                timeout.as_secs()
             ))
         })?
-        .map_err(map_ws_error)
+        .map_err(|error| {
+            if protocol.is_some()
+                && let tokio_tungstenite::tungstenite::Error::Http(response) = &error
+            {
+                let body = response
+                    .body()
+                    .as_deref()
+                    .map(String::from_utf8_lossy)
+                    .unwrap_or_default();
+                return map_http_body(response.status(), &body);
+            }
+            map_ws_error(error)
+        })
     }
 
     pub(crate) async fn connect_box_network_tunnel(

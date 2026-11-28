@@ -216,6 +216,7 @@ const API_KEY_ONLY = [
   'getCheckpoint',
   'removeCheckpoint',
   'attachBox',
+  'uploadFilesWebSocket',
   'prepareTunnel',
   'revokeTunnel',
   'updateInboundNetwork',

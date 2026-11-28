@@ -9,6 +9,7 @@ import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
 import { TypedConfigService } from '../config/typed-config.service'
 import { isVolumeStorageConfigured } from '../box/stores/volume-bucket.store'
 import { REPLAY_LIFETIME, RequestReplayPolicy } from './request-replay-policy'
+import { fileUploadWsEnabled } from './boxlite-upload-bridge'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml.
 @ApiExcludeController()
@@ -24,6 +25,7 @@ export class BoxliteConfigController {
   getConfig() {
     return {
       capabilities: {
+        file_upload_ws_enabled: fileUploadWsEnabled(),
         checkpoints_enabled:
           this.config?.get('checkpoint.enabled') === true && !!this.config?.get('checkpoint.archivePrefix'),
         memory_checkpoints_enabled: false,
