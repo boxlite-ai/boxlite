@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { OrganizationAccessCache } from './organization-access-cache.service'
+import {
+  invalidateMembershipAccessCache,
+  OrganizationAccessCache,
+} from './organization-access-cache.service'
 import { Organization } from '../entities/organization.entity'
 
 class FakeRedis {
@@ -69,6 +72,25 @@ describe('OrganizationAccessCache', () => {
 
     expect(current).toMatchObject({ suspended: true })
     expect(redis.values.get('organization:org-1')).toContain('"suspended":true')
+  })
+
+  it('does not write an old membership result after invalidation', async () => {
+    const redis = new FakeRedis()
+    const cache = new OrganizationAccessCache(redis as any)
+    let release!: (value: Record<string, unknown>) => void
+    const pending = new Promise<Record<string, unknown>>((resolve) => (release = resolve))
+    const oldLoader = jest.fn().mockReturnValue(pending)
+
+    const oldRead = cache.getOrganizationUser('org-1', 'user-1', oldLoader as any)
+    for (let attempt = 0; oldLoader.mock.calls.length === 0 && attempt < 10; attempt++) await Promise.resolve()
+    await invalidateMembershipAccessCache(redis as any, 'org-1', 'user-1')
+    release({ organizationId: 'org-1', userId: 'user-1', role: 'owner' })
+    await oldRead
+
+    const current = await cache.getOrganizationUser('org-1', 'user-1', async () => null)
+
+    expect(current).toBeNull()
+    expect(redis.values.has('organization-user:org-1:user-1')).toBe(false)
   })
 
   it('coalesces memberships by organization and user with a 10-second TTL', async () => {

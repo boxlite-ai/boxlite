@@ -48,6 +48,32 @@ function makeService(transactionalJob: Job) {
   return { entityManager, jobRepository, jobStateHandlerService, service }
 }
 
+describe('JobService direct CREATE_BOX creation', () => {
+  it('inserts IN_PROGRESS once with start timestamps and does not notify Redis', async () => {
+    const insert = jest.fn(async (job: Job) => job)
+    const redis = { lpush: jest.fn() }
+    const service = new JobService({ insert } as any, redis as any, {} as any)
+
+    const job = await (service.createJob as any)(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-1',
+      { image: 'alpine' },
+      { direct: true },
+    )
+
+    expect(insert).toHaveBeenCalledTimes(1)
+    expect(insert).toHaveBeenCalledWith(job)
+    expect(job.status).toBe(JobStatus.IN_PROGRESS)
+    expect(job.startedAt).toBeInstanceOf(Date)
+    expect(job.updatedAt).toEqual(job.startedAt)
+    expect(job.getPayload()).toEqual({ image: 'alpine' })
+    expect(redis.lpush).not.toHaveBeenCalled()
+  })
+})
+
 describe('JobService creation diagnostics', () => {
   it('logs the job, runner, resource and database code without logging its payload', async () => {
     const failure = Object.assign(new Error('insert failed'), {

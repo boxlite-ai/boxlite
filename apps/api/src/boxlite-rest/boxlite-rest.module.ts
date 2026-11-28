@@ -40,6 +40,7 @@ import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AuditModule } from '../audit/audit.module'
 import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
+import { RunnerProxyAgents } from './runner-proxy-agents'
 
 @Module({
   imports: [
@@ -72,6 +73,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     BoxliteInvitationController,
   ],
   providers: [
+    RunnerProxyAgents,
     BoxliteWsProxyService,
     CommerceBoxLimitService,
     CiConnectService,

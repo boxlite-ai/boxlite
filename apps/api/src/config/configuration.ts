@@ -804,6 +804,9 @@ const configuration = {
   boxCreationQuota: {
     redisEnabled: process.env.BOX_CREATION_QUOTA_REDIS_ENABLED === 'true',
   },
+  runnerDirectCreate: {
+    enabled: process.env.RUNNER_DIRECT_CREATE_ENABLED === 'true',
+  },
   runnerAuthCache: {
     enabled: process.env.ENABLE_RUNNER_AUTH_CACHE !== 'false',
   },

@@ -4,16 +4,19 @@
  */
 
 import { Inject, Injectable, Logger } from '@nestjs/common'
-import type { ClientRequest, IncomingMessage } from 'http'
+import type { Agent, ClientRequest, IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { createProxyMiddleware, errorResponsePlugin, type RequestHandler } from 'http-proxy-middleware'
-import { ApiKeyService } from '../api-key/api-key.service'
+import { ApiKeyStrategy, type ApiKeyUserCache } from '../auth/api-key.strategy'
 import { JwtStrategy, jwtUserId } from '../auth/jwt.strategy'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { OrganizationService } from '../organization/services/organization.service'
 import { Organization } from '../organization/entities/organization.entity'
-import { UserService } from '../user/user.service'
-import type { User } from '../user/user.entity'
+import { User } from '../user/user.entity'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import Redis from 'ioredis'
+import { OrganizationAccessCache } from '../organization/services/organization-access-cache.service'
+import { RunnerProxyAgents } from './runner-proxy-agents'
 import { SystemRole } from '../user/enums/system-role.enum'
 import type { ApiKey } from '../api-key/api-key.entity'
 import { BoxService } from '../box/services/box.service'
@@ -57,31 +60,40 @@ const ATTACH_REQUIRED_PERMISSIONS = [OrganizationResourcePermission.WRITE_BOXES]
  * NestJS controller `@Get(':boxId/executions/:execId/attach')` route never
  * fires for actual WS upgrade requests — it's HTTP-only and gets bypassed.
  * Main.ts registers `server.on('upgrade', wsProxy.upgrade)` and routes
- * matching paths through this service, which mirrors the API-key half of
- * CombinedAuthGuard inline, resolves the runner, and hands off to a
- * shared `createProxyMiddleware({ ws: true, ... })` instance.
+ * matching paths through this service, which applies CombinedAuthGuard's user
+ * credential policy, resolves the runner, and hands off to a shared
+ * `createProxyMiddleware({ ws: true, ... })` instance per target protocol.
  */
 @Injectable()
 export class BoxliteWsProxyService {
   private readonly logger = new Logger(BoxliteWsProxyService.name)
   private readonly proxy: RequestHandler
+  private tlsProxy?: RequestHandler
   private readonly upgrades = new WeakMap<Socket, RunnerUpgradeRequest>()
+  @InjectRedis() private readonly redis: Redis
+  private accessCache?: OrganizationAccessCache
 
   constructor(
-    private readonly apiKeyService: ApiKeyService,
+    private readonly apiKeyStrategy: ApiKeyStrategy,
     private readonly organizationUserService: OrganizationUserService,
     private readonly organizationService: OrganizationService,
     private readonly boxService: BoxService,
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
-    private readonly userService: UserService,
     // Exported by AuthModule (already imported here). Resolves to `undefined`
     // when `skipConnections` is set, so the JWT path guards on it.
     @Inject(JwtStrategy) private readonly jwtStrategy: JwtStrategy | undefined,
     private readonly attachTickets: AttachTicketService,
     private readonly auditService: AuditService,
+    private readonly proxyAgents: RunnerProxyAgents,
   ) {
-    this.proxy = createProxyMiddleware({
+    this.proxy = this.createProxy(this.proxyAgents.http)
+  }
+
+  private createProxy(agent: Agent): RequestHandler {
+    return createProxyMiddleware({
+      agent,
+      secure: false,
       ws: true,
       changeOrigin: true,
       plugins: [errorResponsePlugin],
@@ -112,6 +124,14 @@ export class BoxliteWsProxyService {
           const root = upgradeReq.__boxliteWsRoot
           if (root) {
             upgradeReq.__boxliteWsHandshakeSucceeded = false
+            const target = runner?.apiUrl || runner?.proxyUrl || ''
+            const protocol = target.toLowerCase().startsWith('https:') ? 'https' : 'http'
+            const handshakeMetrics: Record<string, string> = {
+              component: BoxliteWsProxyService.name,
+              method: 'upgrade',
+              protocol,
+              reused_socket: 'unknown',
+            }
             const handshake = startTimedOperation(
               'box.exec.ws_handshake',
               {
@@ -119,12 +139,21 @@ export class BoxliteWsProxyService {
                 method: 'upgrade',
                 box_id: upgradeReq.__boxliteRunnerBoxId ?? '',
                 execution_id: upgradeReq.__boxliteExecutionId ?? '',
+                'runner.protocol': protocol,
               },
-              { component: BoxliteWsProxyService.name, method: 'upgrade' },
+              handshakeMetrics,
               root.ctx,
             )
             upgradeReq.__boxliteWsHandshake = handshake
+            const recordSocket = () => {
+              const reused = proxyReq.reusedSocket === true
+              handshakeMetrics.reused_socket = String(reused)
+              handshake.setAttributes({ 'runner.reused_socket': reused })
+            }
+            proxyReq.once('socket', recordSocket)
+            if (proxyReq.socket) recordSocket()
             proxyReq.once('upgrade', (_proxyRes, proxySocket) => this.upgrades.set(proxySocket, upgradeReq))
+            this.bindHandshakeDeadline(proxyReq, upgradeReq)
             propagation.inject(handshake.ctx, {}, { set: (_carrier, key, value) => proxyReq.setHeader(key, value) })
           }
           upgradeReq.__boxliteAttachAudit?.bind(proxyReq)
@@ -152,6 +181,34 @@ export class BoxliteWsProxyService {
         },
       },
     })
+  }
+
+  private bindHandshakeDeadline(proxyReq: ClientRequest, upgradeReq: RunnerUpgradeRequest): void {
+    const clear = () => {
+      clearTimeout(timer)
+      proxyReq.off('upgrade', clear)
+      proxyReq.off('response', clear)
+      proxyReq.off('error', clear)
+      proxyReq.off('close', clear)
+    }
+    const timer = setTimeout(() => {
+      clear()
+      const error = new Error('runner websocket handshake timed out')
+      upgradeReq.__boxliteWsHandshake?.finish('timeout', error)
+      upgradeReq.__boxliteWsRoot?.finish('timeout', error)
+      proxyReq.destroy(error)
+    }, 10_000)
+    timer.unref()
+    proxyReq.once('upgrade', clear)
+    proxyReq.once('response', clear)
+    proxyReq.once('error', clear)
+    proxyReq.once('close', clear)
+  }
+
+  private proxyFor(target: string): RequestHandler {
+    if (!target.toLowerCase().startsWith('https:')) return this.proxy
+    this.tlsProxy ??= this.createProxy(this.proxyAgents.https)
+    return this.tlsProxy
   }
 
   /**
@@ -267,32 +324,25 @@ export class BoxliteWsProxyService {
       lookup.finish()
       upgradeReq.__boxliteRunner = runner
       upgradeReq.__boxliteRunnerBoxId = box.id
-      let session: AttachAuditSession | undefined
-      try {
-        session = await AttachAuditSession.start(
-          this.auditService,
-          socket,
-          {
-            actorId: auth.user.id,
-            actorEmail: auth.user.email ?? '',
-            organizationId: auth.organization.id,
-            targetId: box.id,
-          },
-          match.execId,
-        )
-      } catch {
-        this.logger.warn('Failed to create attach audit')
-        root.finish('error', new Error('failed to create attach audit'))
-        this.respondAndClose(socket, 500, 'Internal Server Error')
-        return
-      }
+      const session = AttachAuditSession.start(
+        this.auditService,
+        socket,
+        {
+          actorId: auth.user.id,
+          actorEmail: auth.user.email ?? '',
+          organizationId: auth.organization.id,
+          targetId: box.id,
+        },
+        match.execId,
+      )
       if (!session) {
         root.finish()
         return
       }
       upgradeReq.__boxliteAttachAudit = session
+      const proxy = this.proxyFor(runner.apiUrl || runner.proxyUrl || '')
       ;(
-        this.proxy as unknown as {
+        proxy as unknown as {
           upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
         }
       ).upgrade(req, socket, head)
@@ -330,9 +380,9 @@ export class BoxliteWsProxyService {
    * for a multi-org user. Authorization then applies identically to the API-key
    * path. `jwtStrategy` is absent when `skipConnections` is set.
    *
-   * Unlike the HTTP path, this does not consult the Redis cache used by
-   * ApiKeyStrategy / OrganizationAccessGuard. Upgrade frequency is low; if
-   * upgrade latency becomes a concern, add caching as a follow-up.
+   * API-key and user reads share ApiKeyStrategy's Redis entries without its
+   * last-used write or machine-credential fallbacks. Organization and membership
+   * reads share OrganizationAccessCache's TTL, invalidation and generation checks.
    */
   private async authenticate(req: IncomingMessage, urlTenant?: string): Promise<AttachAuth | null> {
     try {
@@ -345,28 +395,23 @@ export class BoxliteWsProxyService {
       // 1. API key — org comes from the key itself; the URL tenant is ignored, as
       //    before. A *throw* means "not an API key", so it is caught here to fall
       //    through to JWT rather than being rejected by the outer guard.
-      const apiKey = await this.apiKeyService.getApiKeyByValue(token).catch(() => null)
+      const apiKey = await this.apiKeyStrategy.findApiKey(token).catch(() => null)
       if (apiKey) {
-        if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
-        // The system role comes from the key's user, as ApiKeyStrategy resolves it
-        // on the HTTP path.
-        const user = await this.userService.findOne(apiKey.userId)
+        const user = await this.findUser(apiKey.userId)
         if (!user) return null
-        if (!(await this.authorizeAttach(user, apiKey.organizationId, apiKey))) return null
-        const organization = await this.organizationService.findOne(apiKey.organizationId)
+        const organization = await this.resolveAttachOrganization(user, apiKey.organizationId, apiKey)
         return organization ? { organization, user } : null
       }
 
-      // 2. JWT (OIDC) — org comes from the URL tenant; authorized per authorizeAttach.
+      // 2. JWT (OIDC) — org comes from the URL tenant; authorized per resolveAttachOrganization.
       if (!this.jwtStrategy) return null
       if (!urlTenant || urlTenant === 'default') return null
       const userId = jwtUserId(await this.jwtStrategy.verifyToken(token))
       if (!userId) return null
 
-      const user = await this.userService.findOne(userId)
+      const user = await this.findUser(userId)
       if (!user) return null
-      if (!(await this.authorizeAttach(user, urlTenant))) return null
-      const organization = await this.organizationService.findOne(urlTenant)
+      const organization = await this.resolveAttachOrganization(user, urlTenant)
       return organization ? { organization, user } : null
     } catch {
       // Any failure (invalid JWT signature, a DB error, …) → 401. This single
@@ -377,6 +422,19 @@ export class BoxliteWsProxyService {
     }
   }
 
+  private async findUser(userId: string): Promise<User | null> {
+    const cached = await this.apiKeyStrategy.findUser(userId)
+    return cached ? this.attachUser(cached) : null
+  }
+
+  private attachUser(cached: ApiKeyUserCache): User {
+    return Object.assign(Object.create(User.prototype), {
+      id: cached.userId,
+      role: cached.role,
+      email: cached.email,
+    }) as User
+  }
+
   /**
    * Authorize an attach upgrade with OrganizationResourceActionGuard's policy,
    * which the WS upgrade never reaches. A system admin is not organization-scoped
@@ -385,14 +443,30 @@ export class BoxliteWsProxyService {
    * write:boxes (an org owner without an API key is exempt). Attach streams to an
    * execution's stdin, i.e. interactive exec.
    */
-  private async authorizeAttach(user: User, organizationId: string, apiKey?: ApiKey): Promise<boolean> {
-    if (user.role === SystemRole.ADMIN) return true
-    const membership = await this.organizationUserService.findOne(organizationId, user.id)
-    if (!membership) return false
+  private async resolveAttachOrganization(
+    user: User,
+    organizationId: string,
+    apiKey?: ApiKey,
+  ): Promise<Organization | null> {
+    this.accessCache ??= new OrganizationAccessCache(this.redis)
+    const organization = this.accessCache.getOrganization(organizationId, () =>
+      this.organizationService.findOne(organizationId),
+    )
+    if (user.role === SystemRole.ADMIN) return organization
+
+    const [resolvedOrganization, membership] = await Promise.all([
+      organization,
+      this.accessCache.getOrganizationUser(organizationId, user.id, () =>
+        this.organizationUserService.findOne(organizationId, user.id),
+      ),
+    ])
+    if (!resolvedOrganization || !membership) return null
     return hasOrganizationResourcePermissions(
       { role: user.role, organizationUser: membership, apiKey },
       ATTACH_REQUIRED_PERMISSIONS,
     )
+      ? resolvedOrganization
+      : null
   }
 
   /**
@@ -400,7 +474,7 @@ export class BoxliteWsProxyService {
    * on first use whatever the outcome, must name this execution and, when the
    * URL names one, the URL's organization (a prefix-less or `default` URL was
    * resolved to the grant's org when the ticket was issued). Its credential
-   * must still pass `authorizeAttach`: the API key that bought it, which must
+   * must still pass `resolveAttachOrganization`: the API key that bought it, which must
    * still exist and be unexpired, or else the user, as on the JWT path.
    * Never throws, for the same reason as `authenticate`.
    */
@@ -411,16 +485,14 @@ export class BoxliteWsProxyService {
       const grant = await this.attachTickets.consume(ticket)
       if (!grant || grant.execId !== match.execId) return null
       if (match.tenant && match.tenant !== 'default' && grant.organizationId !== match.tenant) return null
-      const user = await this.userService.findOne(grant.userId)
+      const user = await this.findUser(grant.userId)
       if (!user) return null
       let apiKey: ApiKey | undefined
       if (grant.apiKeyHash) {
-        apiKey = await this.apiKeyService.getApiKeyByHash(grant.apiKeyHash)
-        if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
+        apiKey = await this.apiKeyStrategy.findApiKeyByHash(grant.apiKeyHash)
         if (apiKey.organizationId !== grant.organizationId || apiKey.userId !== grant.userId) return null
       }
-      if (!(await this.authorizeAttach(user, grant.organizationId, apiKey))) return null
-      const organization = await this.organizationService.findOne(grant.organizationId)
+      const organization = await this.resolveAttachOrganization(user, grant.organizationId, apiKey)
       return organization ? { organization, user, ticketBoxId: grant.boxId } : null
     } catch {
       return null

@@ -52,6 +52,7 @@ type Executor struct {
 	checkpointWorkDir string
 	operationMu       sync.Mutex
 	boxOperations     map[string]*boxOperation
+	jobcache          *jobCache
 }
 
 type boxOperation struct {
@@ -98,11 +99,54 @@ func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 		archiveStore:      cfg.ArchiveStore,
 		migrateWorkDir:    cfg.MigrateWorkDir,
 		checkpointWorkDir: cfg.CheckpointWorkDir,
+		jobcache:          newJobCache(defaultJobCacheTTL, defaultJobCacheCapacity, time.Now),
 	}, nil
+}
+
+func (e *Executor) directJobCache() *jobCache {
+	e.operationMu.Lock()
+	defer e.operationMu.Unlock()
+	if e.jobcache == nil {
+		e.jobcache = newJobCache(defaultJobCacheTTL, defaultJobCacheCapacity, time.Now)
+	}
+	return e.jobcache
+}
+
+// AcceptDirectCreate atomically registers a direct CREATE_BOX and returns without waiting for native work.
+func (e *Executor) AcceptDirectCreate(ctx context.Context, job *apiclient.Job) error {
+	ctx = context.WithoutCancel(ctx)
+	cache := e.directJobCache()
+	entry, isNew, err := cache.register(job.GetId())
+	if err != nil {
+		return err
+	}
+	if isNew {
+		go e.execute(ctx, job, entry)
+		return nil
+	}
+
+	done, result, reported := cache.snapshot(entry)
+	if done && !reported {
+		go e.retryDirectReport(ctx, job, entry, result)
+	}
+	return nil
+}
+
+func (e *Executor) retryDirectReport(ctx context.Context, job *apiclient.Job, entry *jobCacheEntry, result *jobResult) {
+	ctx = e.extractTraceContext(ctx, job)
+	if err := e.updateJobStatus(ctx, job.GetId(), result.status, result.resultMetadata, result.errorMessage); err != nil {
+		e.log.ErrorContext(ctx, "Failed to retry direct job status", "job_id", job.GetId(), "error", err)
+		return
+	}
+	e.directJobCache().markReported(entry)
 }
 
 // Execute processes a job and updates its status
 func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
+	e.execute(ctx, job, nil)
+}
+
+func (e *Executor) execute(ctx context.Context, job *apiclient.Job, directEntry *jobCacheEntry) {
 	if job.Type == apiclient.JOBTYPE_EXPORT_CHECKPOINT || job.Type == apiclient.JOBTYPE_UPLOAD_CHECKPOINT || job.Type == apiclient.JOBTYPE_IMPORT_CHECKPOINT {
 		// Native export cancellation stops waiting, not capture. The accepted
 		// job owns its files and BOX slot until native work actually returns.
@@ -194,6 +238,14 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 		jobLog.InfoContext(ctx, "Job completed successfully")
 	}
 
+	if directEntry != nil {
+		e.directJobCache().complete(directEntry, &jobResult{
+			status:         status,
+			resultMetadata: resultMetadata,
+			errorMessage:   errorMessage,
+		})
+	}
+
 	// Report status to API
 	reportStart := time.Now()
 	reportErr := e.updateJobStatus(ctx, job.GetId(), status, resultMetadata, errorMessage)
@@ -205,6 +257,9 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 		jobSpan.SetStatus(codes.Error, "update job status failed")
 		jobLog.ErrorContext(ctx, "Failed to update job status", "error", reportErr)
 	} else {
+		if directEntry != nil {
+			e.directJobCache().markReported(directEntry)
+		}
 		e.acknowledgeCheckpointUpload(ctx, job)
 	}
 }

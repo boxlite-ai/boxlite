@@ -186,8 +186,9 @@ type harness struct {
 	calls    *callLog
 	workDir  string
 
-	mu       sync.Mutex
-	reported []reportedStatus
+	mu           sync.Mutex
+	reported     []reportedStatus
+	reportStatus int
 }
 
 func newHarness(t *testing.T, configure func(*harness)) *harness {
@@ -212,7 +213,12 @@ func newHarness(t *testing.T, configure func(*harness)) *harness {
 
 		h.mu.Lock()
 		h.reported = append(h.reported, reportedStatus{method: r.Method, path: r.URL.Path, body: body})
+		reportStatus := h.reportStatus
 		h.mu.Unlock()
+		if reportStatus >= http.StatusBadRequest {
+			w.WriteHeader(reportStatus)
+			return
+		}
 
 		// The real endpoint echoes the updated job. The runner ignores it, but
 		// the generated client insists on decoding it, and a response it cannot

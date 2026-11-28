@@ -10,6 +10,9 @@ import { EventEmitter } from 'node:events'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AttachTicketService } from '../box/services/attach-ticket.service'
+import { ApiKeyStrategy } from '../auth/api-key.strategy'
+import { apiKeyValidationCacheKey, generateApiKeyHash } from '../common/utils/api-key'
+import { organizationMembershipCacheKey } from '../organization/services/organization-access-cache.service'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(() => ({
@@ -21,15 +24,29 @@ jest.mock('uuid', () => ({
   validate: jest.fn(() => true),
 }))
 
-/** The two Redis calls `AttachTicketService` makes, over a map. */
 function fakeRedis() {
-  const store = new Map<string, string>()
+  const values = new Map<string, string>()
+  const generations = new Map<string, number>()
   return {
-    set: async (key: string, value: string) => (store.set(key, value), 'OK'),
+    values,
+    set: async (key: string, value: string) => (values.set(key, value), 'OK'),
+    setex: async (key: string, _seconds: number, value: string) => (values.set(key, value), 'OK'),
+    get: async (key: string) => generations.get(key)?.toString() ?? values.get(key) ?? null,
     getdel: async (key: string) => {
-      const value = store.get(key) ?? null
-      store.delete(key)
+      const value = values.get(key) ?? null
+      values.delete(key)
       return value
+    },
+    eval: async (_script: string, _keyCount: number, generationKey: string, valueKey: string, ...args: string[]) => {
+      if (args.length === 0) {
+        generations.set(generationKey, (generations.get(generationKey) ?? 0) + 1)
+        values.delete(valueKey)
+        return 1
+      }
+      const [expectedGeneration, value] = args
+      if ((generations.get(generationKey) ?? 0).toString() !== expectedGeneration) return 0
+      values.set(valueKey, value)
+      return 1
     },
   }
 }
@@ -52,6 +69,7 @@ describe('BoxliteWsProxyService', () => {
     const apiKeyService = {
       getApiKeyByValue: jest.fn().mockRejectedValue(new Error('api key not found')),
       getApiKeyByHash: jest.fn().mockRejectedValue(new Error('api key not found')),
+      updateLastUsedAt: jest.fn().mockResolvedValue(undefined),
     }
     const organizationUserService = {
       findOne: jest.fn(),
@@ -73,28 +91,40 @@ describe('BoxliteWsProxyService', () => {
     const jwtStrategy = {
       verifyToken: jest.fn(),
     }
-    const attachTickets = new AttachTicketService(fakeRedis() as never)
+    const redis = fakeRedis()
+    const attachTickets = new AttachTicketService(redis as never)
     const audit = {
       createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
       updateLog: jest.fn().mockResolvedValue({}),
     }
-    const service = new BoxliteWsProxyService(
+    const apiKeyStrategy = new ApiKeyStrategy(
+      redis as never,
       apiKeyService as never,
+      userService as never,
+      { get: jest.fn().mockReturnValue(undefined) } as never,
+      { findByApiKey: jest.fn() } as never,
+      { findOneByProxyApiKey: jest.fn() } as never,
+    )
+    const service = new BoxliteWsProxyService(
+      apiKeyStrategy,
       organizationUserService as never,
       organizationService as never,
       boxService as never,
       runnerService as never,
       autoResume as never,
-      userService as never,
       jwtStrategy as never,
       attachTickets,
       audit as never,
-    ) as unknown as {
-      authenticate: (req: IncomingMessage, urlTenant?: string) => Promise<{ organization: { id: string } } | null>
-    }
+      { http: {}, https: {} } as never,
+    )
+    Object.assign(service, { apiKeyStrategy, redis })
 
     return {
-      service,
+      service: service as unknown as {
+        authenticate: (req: IncomingMessage, urlTenant?: string) => Promise<{ organization: { id: string } } | null>
+      },
+      redis,
+      apiKeyStrategy,
       apiKeyService,
       organizationUserService,
       organizationService,
@@ -119,7 +149,7 @@ describe('BoxliteWsProxyService', () => {
       {} as never,
       {} as never,
       {} as never,
-      {} as never,
+      { http: {}, https: {} } as never,
     )
 
     const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
@@ -180,6 +210,66 @@ describe('BoxliteWsProxyService', () => {
     })
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
     expect(jwtStrategy.verifyToken).not.toHaveBeenCalled()
+  })
+
+  it('uses the HTTP API key, user, organization and membership caches without PostgreSQL reads', async () => {
+    const { service, redis, apiKeyService, userService, organizationService, organizationUserService } =
+      buildAuthHarness()
+    redis.values.set(
+      apiKeyValidationCacheKey(generateApiKeyHash('cached-key')),
+      JSON.stringify({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        expiresAt: null,
+        permissions: [OrganizationResourcePermission.WRITE_BOXES],
+      }),
+    )
+    redis.values.set(
+      'api-key:user:user-1',
+      JSON.stringify({ userId: 'user-1', role: 'user', email: 'cached@acme.test' }),
+    )
+    redis.values.set('organization:org-1', JSON.stringify({ id: 'org-1', suspended: false }))
+    redis.values.set(
+      organizationMembershipCacheKey('org-1', 'user-1'),
+      JSON.stringify({ organizationId: 'org-1', userId: 'user-1', role: 'owner' }),
+    )
+
+    await expect(service.authenticate(authRequest('cached-key'))).resolves.toMatchObject({
+      organization: { id: 'org-1' },
+      user: { id: 'user-1', email: 'cached@acme.test' },
+    })
+
+    expect(apiKeyService.getApiKeyByValue).not.toHaveBeenCalled()
+    expect(apiKeyService.updateLastUsedAt).not.toHaveBeenCalled()
+    expect(userService.findOne).not.toHaveBeenCalled()
+    expect(organizationService.findOne).not.toHaveBeenCalled()
+    expect(organizationUserService.findOne).not.toHaveBeenCalled()
+  })
+
+  it('backfills the shared caches on a miss without updating lastUsedAt or trying machine credentials', async () => {
+    const { service, redis, apiKeyService, organizationUserService } = buildAuthHarness()
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      expiresAt: null,
+      permissions: [OrganizationResourcePermission.WRITE_BOXES],
+    })
+    organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1', role: 'owner' })
+
+    await expect(service.authenticate(authRequest('new-key'))).resolves.toMatchObject({
+      organization: { id: 'org-1' },
+      user: { id: 'user-1' },
+    })
+    await expect(service.authenticate(authRequest('new-key'))).resolves.toMatchObject({
+      organization: { id: 'org-1' },
+    })
+
+    expect(apiKeyService.getApiKeyByValue).toHaveBeenCalledTimes(1)
+    expect(apiKeyService.updateLastUsedAt).not.toHaveBeenCalled()
+    expect(organizationUserService.findOne).toHaveBeenCalledTimes(1)
+    expect(redis.values.has(apiKeyValidationCacheKey(generateApiKeyHash('new-key')))).toBe(true)
+    expect(redis.values.has('organization:org-1')).toBe(true)
+    expect(redis.values.has(organizationMembershipCacheKey('org-1', 'user-1'))).toBe(true)
   })
 
   it('authenticates JWT bearer tokens for websocket attach', async () => {
@@ -437,6 +527,24 @@ describe('BoxliteWsProxyService', () => {
         expiresAt: null,
         permissions: [OrganizationResourcePermission.WRITE_BOXES],
         ...overrides,
+      })
+
+      it('reuses the validation cache when consuming a key-bound ticket', async () => {
+        const harness = buildAuthHarness()
+        harness.organizationUserService.findOne.mockResolvedValue({
+          organizationId: 'org-1',
+          userId: 'user-1',
+          role: 'owner',
+        })
+        harness.redis.values.set(apiKeyValidationCacheKey('key-hash-1'), JSON.stringify(apiKey()))
+        const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+        const ticket = await harness.attachTickets.issue(keyGrant)
+
+        const { socket } = await upgradeWithTicket(harness, attachUrl(ticket))
+
+        expect(socket.write).not.toHaveBeenCalled()
+        expect(proxyHandler.upgrade).toHaveBeenCalledTimes(1)
+        expect(harness.apiKeyService.getApiKeyByHash).not.toHaveBeenCalled()
       })
 
       it("accepts it when the key has write:boxes though the user's role does not", async () => {

@@ -5,15 +5,17 @@
  */
 
 import { Inject, Injectable, Logger } from '@nestjs/common'
+import axios from 'axios'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { SecretCredentialService } from '../services/secret-credential.service'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository, IsNull } from 'typeorm'
+import { Repository, IsNull, EntityManager } from 'typeorm'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
 import { Runner } from '../entities/runner.entity'
 import { Box } from '../entities/box.entity'
 import { memoryGiBOf } from '../utils/memory-allocation'
 import { Job } from '../entities/job.entity'
+import { JobDto } from '../dto/job.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { JobType } from '../enums/job-type.enum'
 import { JobStatus } from '../enums/job-status.enum'
@@ -26,8 +28,8 @@ import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
- * Instead of making direct API calls to the runner, it creates jobs in the database
- * that the v2 runner polls and processes asynchronously.
+ * Jobs ordinarily use the v2 long-poll path. Capable, ready Runners can accept
+ * fresh CREATE_BOX jobs directly; every job completes through the same callback.
  */
 @Injectable()
 export class RunnerAdapterV2 implements RunnerAdapter {
@@ -170,6 +172,49 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     throw error
   }
 
+  private supportsDirectCreate(): boolean {
+    return Boolean(
+      this.config.get('runnerDirectCreate.enabled') &&
+        this.runner.state === RunnerState.READY &&
+        this.runner.apiUrl &&
+        this.runner.capabilities?.includes('direct-create-v1'),
+    )
+  }
+
+  private createCreateBoxJob(
+    manager: EntityManager | null,
+    box: Box,
+    payload: Record<string, any>,
+    direct: boolean,
+  ): Promise<Job> {
+    if (direct) {
+      return this.jobService.createJob(manager, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload, {
+        direct: true,
+      })
+    }
+    return this.jobService.createJob(manager, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+  }
+
+  private async dispatchDirectCreate(job: Job): Promise<void> {
+    try {
+      const response = await axios.post(
+        `${this.runner.apiUrl!.replace(/\/+$/, '')}/internal/jobs/${encodeURIComponent(job.id)}/direct-create`,
+        new JobDto(job),
+        {
+          headers: { Authorization: `Bearer ${this.runner.apiKey}` },
+          timeout: 10_000,
+        },
+      )
+      if (response.status !== 202) {
+        throw new Error(`Runner returned HTTP ${response.status}`)
+      }
+    } catch (error) {
+      throw new Error(`Direct CREATE_BOX dispatch failed for job ${job.id} on runner ${this.runner.id}`, {
+        cause: error,
+      })
+    }
+  }
+
   @WithInstrumentation('box.runner_create_dispatch')
   async createBox(
     box: Box,
@@ -225,6 +270,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       regionId: box.region,
     }
 
+    const direct = this.supportsDirectCreate()
     if (enabled && secrets.length) {
       const job = await this.jobRepository.manager.transaction(async (manager) => {
         const secretCredential = await this.credentials.issue(
@@ -236,14 +282,16 @@ export class RunnerAdapterV2 implements RunnerAdapter {
           },
           manager,
         )
-        return this.jobService.createJob(manager, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, {
-          ...payload,
-          secretCredential,
-        })
+        return this.createCreateBoxJob(manager, box, { ...payload, secretCredential }, direct)
       })
-      await this.jobService.notifyRunner(job.runnerId, job.id)
+      if (direct) {
+        await this.dispatchDirectCreate(job)
+      } else {
+        await this.jobService.notifyRunner(job.runnerId, job.id)
+      }
     } else {
-      await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+      const job = await this.createCreateBoxJob(null, box, payload, direct)
+      if (direct) await this.dispatchDirectCreate(job)
     }
 
     this.logger.debug(`Created CREATE_BOX job for box ${box.id} on runner ${this.runner.id}`)

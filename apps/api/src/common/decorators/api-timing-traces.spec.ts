@@ -257,7 +257,13 @@ describe('API timing trace relationships', () => {
         findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
       },
     })
-    const controller = new BoxliteProxyController(boxService as any, runnerService, autoResume, {} as any)
+    const controller = new BoxliteProxyController(
+      boxService as any,
+      runnerService,
+      autoResume,
+      {} as any,
+      { forTarget: () => ({}) } as any,
+    )
     const req = {
       method: 'POST',
       url: '/exec',
