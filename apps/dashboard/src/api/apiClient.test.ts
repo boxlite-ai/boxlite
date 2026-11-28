@@ -144,6 +144,24 @@ it('sends the dashboard activity source without inventing an SDK version', async
   }
 })
 
+it('keeps usage and telemetry requests on the configured Analytics API', async () => {
+  const requests: any[] = []
+  const analyticsApiUrl = 'http://analytics.test/analytics'
+  const api = await makeClient(vi.fn(), 200, {}, requests, {}, { ...config, analyticsApiUrl } as never)
+  const from = '2026-11-01T00:00:00.000Z'
+  const to = '2026-11-02T00:00:00.000Z'
+
+  await api.analyticsUsageApi!.organizationOrganizationIdUsageAggregatedGet('org-1', from, to)
+  await api.analyticsTelemetryApi!.organizationOrganizationIdBoxBoxIdTelemetryTracesGet('org-1', 'box-1', from, to)
+
+  expect(requests).toHaveLength(2)
+  expect(requests.map((request) => request.baseURL)).toEqual([analyticsApiUrl, analyticsApiUrl])
+  expect(requests.map((request) => request.url)).toEqual([
+    '/organization/org-1/usage/aggregated?from=2026-11-01T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z',
+    '/organization/org-1/box/box-1/telemetry/traces?from=2026-11-01T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z',
+  ])
+}, 30_000)
+
 // Each client starts with fresh reauthentication state and uses the real response interceptor.
 async function makeClient(
   onUnauthorized: () => Promise<void> | void,
@@ -151,6 +169,7 @@ async function makeClient(
   body: unknown = {},
   requests: any[] = [],
   headers: Record<string, string> = {},
+  clientConfig = config,
 ) {
   vi.resetModules()
   const axios = (await import('axios')).default
@@ -171,7 +190,7 @@ async function makeClient(
     throw new axios.AxiosError(`Request failed with status code ${status}`, undefined, cfg, undefined, response)
   }
   const { ApiClient } = await import('./apiClient')
-  return new ApiClient(config, 'tok', onUnauthorized)
+  return new ApiClient(clientConfig, 'tok', onUnauthorized)
 }
 
 it('uses the renewed token for billing requests', async () => {
@@ -185,6 +204,61 @@ it('uses the renewed token for billing requests', async () => {
 it.each([204, 401, 403, 503])('preserves HTTP %i when eligibility has no decision', async (status) => {
   const api = await makeClient(vi.fn(), status)
   await expect(api.billingApi.getPlanTrialEligibility('org')).rejects.toMatchObject({ cause: { response: { status } } })
+})
+
+describe('ApiClient Box API errors', () => {
+  it('uses the current access token for Box API requests', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 201, { box_id: 'box-1' }, requests)
+    api.setAccessToken('renewed-token')
+    const cloud = await import('../lib/cloudBox')
+
+    await cloud.createBoxViaBoxApi(api, 'org-1', {})
+
+    expect(requests[0].headers.Authorization).toBe('Bearer renewed-token')
+  })
+
+  it('preserves structured metadata and the specialized type for suspended organizations', async () => {
+    const api = await makeClient(vi.fn(), 403, {
+      message: 'Organization is suspended',
+      statusCode: 403,
+      code: 'ORGANIZATION_SUSPENDED',
+      boxId: 'box-1',
+    })
+    const cloud = await import('../lib/cloudBox')
+    const { OrganizationSuspendedError } = await import('./errors')
+
+    const error = await cloud.createBoxViaBoxApi(api, 'org-1', {}).catch((failure) => failure)
+
+    expect(error).toBeInstanceOf(OrganizationSuspendedError)
+    expect(error).toMatchObject({
+      message: 'Organization is suspended',
+      statusCode: 403,
+      code: 'ORGANIZATION_SUSPENDED',
+      boxId: 'box-1',
+    })
+  })
+
+  it('preserves the server reason, status, code and Box ID for create-box failures', async () => {
+    const api = await makeClient(vi.fn(), 400, {
+      message: 'runner has not declared filestore',
+      statusCode: 400,
+      code: 'BOX_STATE_TRANSITION_FAILED',
+      boxId: 'box-1',
+    })
+    const cloud = await import('../lib/cloudBox')
+    const { BoxliteError } = await import('./errors')
+
+    const error = await cloud.createBoxViaBoxApi(api, 'org-1', {}).catch((failure) => failure)
+
+    expect(error).toBeInstanceOf(BoxliteError)
+    expect(error).toMatchObject({
+      message: 'runner has not declared filestore',
+      statusCode: 400,
+      code: 'BOX_STATE_TRANSITION_FAILED',
+      boxId: 'box-1',
+    })
+  })
 })
 
 describe('ApiClient registration deadline', () => {
@@ -414,7 +488,7 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
 
     const error = await api.organizationsApi.listOrganizations().catch((caught: unknown) => caught)
 
-    expect(error).toMatchObject({ code, message: 'Account creation refused' })
+    expect(error).toMatchObject({ code, message: 'Account creation refused', statusCode: status })
     expect(onUnauthorized).not.toHaveBeenCalled()
     expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
   })
@@ -530,6 +604,17 @@ describe('ApiClient checkpoints', () => {
   })
 })
 
+describe('ApiClient volume storage capabilities', () => {
+  it('discovers volume backend capabilities using the authenticated REST client', async () => {
+    const requests: any[] = []
+    const capabilities = { object_storage_enabled: true, filestore_enabled: false }
+    const api = await makeClient(vi.fn(), 200, { capabilities }, requests)
+
+    await expect(api.getVolumeStorageCapabilities()).resolves.toEqual(capabilities)
+    expect(requests[0]).toMatchObject({ method: 'get', url: '/v1/config' })
+  })
+})
+
 describe('ApiClient.setBoxInboundMode', () => {
   it('sends the mode to the /v1 inbound route of the selected organization', async () => {
     vi.resetModules()
@@ -614,7 +699,8 @@ describe('ApiClient terminal session', () => {
     const url = await api.terminalAttachUrl('org-1', 'box-1', 'exec-1')
 
     expect(requests[0].method).toBe('post')
-    expect(requests[0].url).toBe('http://api.test/api/box/box-1/attach-tickets')
+    expect(requests[0].url).toBe('/box/box-1/attach-tickets')
+    expect(requests[0].baseURL).toBe('http://api.test/api')
     expect(JSON.parse(requests[0].data ?? '')).toEqual({ executionId: 'exec-1' })
     expect(url).toBe('ws://api.test/api/v1/org-1/boxes/box-1/executions/exec-1/attach?ticket=tkt-1')
     expect(url).not.toContain('tok')

@@ -74,7 +74,14 @@ export function createMockCheckpointBox(org: string, key: string, name?: string)
 
 export const checkpointHandlers = [
   http.get('*/v1/config', () =>
-    HttpResponse.json({ capabilities: { checkpoints_enabled: true, private_tunnels_enabled: true } }),
+    HttpResponse.json({
+      capabilities: {
+        checkpoints_enabled: true,
+        private_tunnels_enabled: true,
+        object_storage_enabled: true,
+        filestore_enabled: true,
+      },
+    }),
   ),
   http.get('*/v1/:organizationId/checkpoints', ({ params }) => {
     const rows = [...recordsFor(String(params.organizationId)).values()]

@@ -8,6 +8,15 @@ const server = setupServer(...checkpointHandlers)
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterAll(() => server.close())
 
+it('advertises the volume backends supported by the mock preview', async () => {
+  const response = await fetch('https://checkpoint-preview.test/v1/config')
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({
+    capabilities: { object_storage_enabled: true, filestore_enabled: true },
+  })
+})
+
 it('checkpoint preview captures only a source owned by the requested organization', async () => {
   const source = buildBox({
     id: 'foreign-capture-source',

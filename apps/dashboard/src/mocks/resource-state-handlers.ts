@@ -12,7 +12,17 @@ export function resourceStateHandlers(apiUrl: string) {
     [`${apiUrl}/volumes`, []],
     [`${apiUrl}/api-keys`, []],
     [`${apiUrl}/box/paginated`, { items: [], total: 0, totalPages: 0, page: 1, pageSize: 25 }],
-    ['*/v1/config', { capabilities: { checkpoints_enabled: true, private_tunnels_enabled: true } }],
+    [
+      '*/v1/config',
+      {
+        capabilities: {
+          checkpoints_enabled: true,
+          private_tunnels_enabled: true,
+          object_storage_enabled: true,
+          filestore_enabled: true,
+        },
+      },
+    ],
     ['*/v1/:organizationId/checkpoints', { checkpoints: [] }],
     [
       '*/v1/:organizationId/domains',

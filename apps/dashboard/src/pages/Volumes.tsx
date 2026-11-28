@@ -37,6 +37,7 @@ import { HardDrive, Plus, Trash } from '@/components/ui/icon'
 import { useCreateVolumeMutation } from '@/hooks/mutations/useCreateVolumeMutation'
 import { useDeleteVolumeMutation } from '@/hooks/mutations/useDeleteVolumeMutation'
 import { queryKeys } from '@/hooks/queries/queryKeys'
+import { useVolumeStorageCapabilities } from '@/hooks/queries/useVolumeStorageCapabilities'
 import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useVolumeWsSync } from '@/hooks/useVolumeWsSync'
@@ -44,7 +45,13 @@ import { copyToClipboard } from '@/lib/copy-text'
 import { handleApiError } from '@/lib/error-handling'
 import { timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { OrganizationRolePermissionsEnum, VolumeDto, VolumeState } from '@boxlite-ai/api-client'
+import {
+  CreateVolumeStorageBackendEnum,
+  OrganizationRolePermissionsEnum,
+  VolumeDto,
+  VolumeDtoStorageBackendEnum,
+  VolumeState,
+} from '@boxlite-ai/api-client'
 import { useQueryClient } from '@tanstack/react-query'
 import React, { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
@@ -62,8 +69,9 @@ const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]+$/
 // buttons under it — and every `fr` column drifted further apart the further
 // right it sat. The last column is therefore fixed, and this string exists
 // once so the two can no longer diverge.
-const ROW_GRID =
-  'grid min-w-[760px] grid-cols-[minmax(0,1.4fr)_minmax(0,1.5fr)_120px_100px_100px_104px] items-center gap-4'
+// `min-w` keeps every column readable on a phone: the list scrolls sideways inside its own
+// box instead of squeezing names down to a letter.
+const ROW_GRID = 'grid min-w-[840px] grid-cols-[1.6fr_1.2fr_1fr_1fr_0.8fr_0.85fr_104px] items-center gap-3'
 
 // Transitional states read as `warn` rather than blending in with the healthy
 // ones: a volume stuck in `pending_delete` is exactly the leak this page exists
@@ -100,6 +108,13 @@ const Volumes: React.FC = () => {
   const queryKey = useMemo(() => queryKeys.volumes.list(selectedOrganization?.id ?? ''), [selectedOrganization?.id])
   const { data: inventory, error: volumesError, isFetching, refetch } = useVolumesQuery()
   const volumes = inventory ?? []
+  const {
+    data: storageCapabilities,
+    isLoading: storageCapabilitiesLoading,
+    isFetching: storageCapabilitiesFetching,
+    isError: storageCapabilitiesError,
+    refetch: refetchStorageCapabilities,
+  } = useVolumeStorageCapabilities()
   const createVolume = useCreateVolumeMutation()
   const deleteVolume = useDeleteVolumeMutation({ invalidateOnSuccess: false })
 
@@ -110,6 +125,9 @@ const Volumes: React.FC = () => {
   const [filter, setFilter] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [newName, setNewName] = useState('')
+  const [newStorageBackend, setNewStorageBackend] = useState<CreateVolumeStorageBackendEnum>(
+    CreateVolumeStorageBackendEnum.STANDARD,
+  )
   const [pendingDelete, setPendingDelete] = useState<VolumeDto | null>(null)
   const [boxVolumeId, setBoxVolumeId] = useState<string | null>(null)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
@@ -131,6 +149,17 @@ const Volumes: React.FC = () => {
   }, [volumes, filter])
 
   const nameValid = !newName || NAME_REGEX.test(newName)
+  const objectStorageAvailable = storageCapabilities?.object_storage_enabled !== false
+  const filestoreAvailable = storageCapabilities?.filestore_enabled === true
+  // The server assigns the Filestore instance; the dashboard deliberately does
+  // not ask users to know one. Falling back to the only available backend
+  // avoids opening with a choice that is guaranteed to fail.
+  const selectedStorageBackend = objectStorageAvailable
+    ? newStorageBackend === CreateVolumeStorageBackendEnum.PERFORMANCE && !filestoreAvailable
+      ? CreateVolumeStorageBackendEnum.STANDARD
+      : newStorageBackend
+    : CreateVolumeStorageBackendEnum.PERFORMANCE
+  const storageUnavailable = !objectStorageAvailable && !filestoreAvailable
 
   // Exact match, untrimmed: a pasted name with a stray space is exactly the
   // half-attention this gate exists to catch.
@@ -146,11 +175,19 @@ const Volumes: React.FC = () => {
       toast.error('Only letters, digits, dots, underscores and dashes are allowed in the name.')
       return
     }
+    if (createVolume.isPending || storageCapabilitiesLoading || storageCapabilitiesError || storageUnavailable) return
     try {
-      await createVolume.mutateAsync({ volume: { name }, organizationId: selectedOrganization?.id })
+      await createVolume.mutateAsync({
+        volume: { name, storageBackend: selectedStorageBackend },
+        organizationId: selectedOrganization?.id,
+      })
       setCreateOpen(false)
       setNewName('')
-      toast.success(`Creating volume ${name}`)
+      toast.success(
+        selectedStorageBackend === CreateVolumeStorageBackendEnum.PERFORMANCE
+          ? `Created volume ${name}`
+          : `Creating volume ${name}`,
+      )
     } catch (error) {
       handleApiError(error, 'Failed to create volume')
     }
@@ -202,7 +239,16 @@ const Volumes: React.FC = () => {
         />
         <div className="flex-1" />
         {canWrite && (
-          <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" onClick={() => setCreateOpen(true)}>
+          <AsciiButton
+            variant="primary"
+            className="h-11 sm:h-9"
+            type="button"
+            onClick={() => {
+              setNewName('')
+              setNewStorageBackend(CreateVolumeStorageBackendEnum.STANDARD)
+              setCreateOpen(true)
+            }}
+          >
             <Plus className="size-3.5" strokeWidth={2.4} />
             New Volume
           </AsciiButton>
@@ -221,6 +267,7 @@ const Volumes: React.FC = () => {
           <span>Name</span>
           <span>Volume ID</span>
           <span>Status</span>
+          <span>Storage</span>
           <span>Created</span>
           {/* `lastUsedAt` is written only when a box that mounts the volume is
                   created (volume.service.ts:254-272), never on read or write — so it
@@ -267,6 +314,13 @@ const Volumes: React.FC = () => {
                 </button>
                 <span title={statusDetail} className={statusDetail ? 'cursor-help' : undefined}>
                   <StatusMark tone={STATE_TONE[volume.state] ?? 'idle'}>{volume.state}</StatusMark>
+                </span>
+                <span className="font-mono text-meta text-muted-foreground">
+                  {volume.storageBackend === VolumeDtoStorageBackendEnum.PERFORMANCE
+                    ? 'Performance'
+                    : volume.storageBackend === VolumeDtoStorageBackendEnum.STANDARD
+                      ? 'Standard'
+                      : 'Unknown'}
                 </span>
                 <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.createdAt)}</span>
                 <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.lastUsedAt)}</span>
@@ -330,8 +384,8 @@ const Volumes: React.FC = () => {
             <DialogTitle>New Volume</DialogTitle>
           </DialogHeader>
           <FormDialogBody>
-            {/* Nothing else here says what a volume is — the payload is just a
-                name — and this dialog is where someone meets the concept. */}
+            {/* This dialog is where someone meets the concept. The backend is
+                explicit; the instance is server scheduling, not user input. */}
             <p className="mb-[5px] font-sans text-meta leading-relaxed text-muted-foreground">
               Storage that outlives a box. Mount it into a box to read and write; the data stays once that box is gone,
               and another box can mount it later.
@@ -346,10 +400,37 @@ const Volumes: React.FC = () => {
               aria-invalid={!nameValid}
               className="form-field-input font-mono"
             />
-            {/* Name is the entire create payload — the API accepts nothing else
-                — and a mount takes a name in place of an id, so this is the
-                handle the user will type later. */}
-            <PanelNote>Used to mount this volume into a box. It takes a few seconds to become ready.</PanelNote>
+            <div className="mt-4">
+              <div className="form-field-label">Volume storage</div>
+              <select
+                value={selectedStorageBackend}
+                onChange={(event) => setNewStorageBackend(event.target.value as CreateVolumeStorageBackendEnum)}
+                aria-label="Volume storage"
+                className="form-field-input"
+              >
+                <option value={CreateVolumeStorageBackendEnum.STANDARD} disabled={!objectStorageAvailable}>
+                  Standard
+                </option>
+                <option value={CreateVolumeStorageBackendEnum.PERFORMANCE} disabled={!filestoreAvailable}>
+                  Performance
+                </option>
+              </select>
+            </div>
+            {storageCapabilitiesError ? (
+              <ResourceErrorNotice
+                title="Could not load volume storage options."
+                retrying={storageCapabilitiesFetching}
+                onRetry={() => void refetchStorageCapabilities()}
+              />
+            ) : !objectStorageAvailable && !filestoreAvailable ? (
+              <PanelNote>This deployment has no volume storage configured.</PanelNote>
+            ) : !filestoreAvailable ? (
+              <PanelNote>Performance storage is not configured on this deployment.</PanelNote>
+            ) : selectedStorageBackend === CreateVolumeStorageBackendEnum.PERFORMANCE ? (
+              <PanelNote>Used to mount this volume into a box. It is ready immediately after creation.</PanelNote>
+            ) : (
+              <PanelNote>Used to mount this volume into a box. It takes a few seconds to become ready.</PanelNote>
+            )}
           </FormDialogBody>
           <DialogFooter>
             <AsciiButton type="button" onClick={() => setCreateOpen(false)}>
@@ -359,7 +440,14 @@ const Volumes: React.FC = () => {
               variant="primary"
               type="button"
               onClick={handleCreate}
-              disabled={createVolume.isPending || !newName.trim() || !nameValid}
+              disabled={
+                createVolume.isPending ||
+                storageCapabilitiesLoading ||
+                storageCapabilitiesError ||
+                storageUnavailable ||
+                !newName.trim() ||
+                !nameValid
+              }
             >
               {createVolume.isPending ? 'Creating…' : 'Create'}
             </AsciiButton>

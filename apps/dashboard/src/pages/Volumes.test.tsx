@@ -5,6 +5,7 @@
  */
 
 import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { BoxliteError } from '@/api/errors'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,6 +18,7 @@ const READY_VOLUME = {
   state: 'ready',
   createdAt: new Date().toISOString(),
   lastUsedAt: null,
+  storageBackend: 'standard',
 }
 
 // Stands in for the real form so the assertions can read what the page decided
@@ -38,6 +40,18 @@ const state = vi.hoisted(() => ({
   refetch: vi.fn(),
   volumeState: 'ready',
   errorReason: undefined as string | undefined,
+  storageBackend: 'standard',
+  instance: undefined as string | undefined,
+  capabilities: undefined as
+    | { object_storage_enabled?: boolean; filestore_enabled?: boolean }
+    | undefined,
+  capabilitiesLoading: false,
+  capabilitiesFetching: false,
+  capabilitiesError: false,
+  capabilitiesRefetch: vi.fn(),
+  createdVolume: undefined as Record<string, unknown> | undefined,
+  createError: undefined as Error | undefined,
+  createPending: false,
 }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
@@ -53,7 +67,15 @@ vi.mock('@/hooks/queries/useVolumesQuery', () => ({
         ? undefined
         : state.empty
           ? []
-          : [{ ...READY_VOLUME, state: state.volumeState, errorReason: state.errorReason }],
+          : [
+              {
+                ...READY_VOLUME,
+                state: state.volumeState,
+                errorReason: state.errorReason,
+                storageBackend: state.storageBackend,
+                instance: state.instance,
+              },
+            ],
     isLoading: state.loading,
     error: state.error,
     refetch: state.refetch,
@@ -61,7 +83,22 @@ vi.mock('@/hooks/queries/useVolumesQuery', () => ({
   }),
 }))
 vi.mock('@/hooks/mutations/useCreateVolumeMutation', () => ({
-  useCreateVolumeMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreateVolumeMutation: () => ({
+    mutateAsync: vi.fn(async (variables: { volume: Record<string, unknown> }) => {
+      if (state.createError) throw state.createError
+      state.createdVolume = variables.volume
+    }),
+    isPending: state.createPending,
+  }),
+}))
+vi.mock('@/hooks/queries/useVolumeStorageCapabilities', () => ({
+  useVolumeStorageCapabilities: () => ({
+    data: state.capabilities,
+    isLoading: state.capabilitiesLoading,
+    isFetching: state.capabilitiesFetching,
+    isError: state.capabilitiesError,
+    refetch: state.capabilitiesRefetch,
+  }),
 }))
 vi.mock('@/hooks/mutations/useDeleteVolumeMutation', () => ({
   useDeleteVolumeMutation: () => ({ mutateAsync: vi.fn() }),
@@ -82,6 +119,29 @@ function rowAction(label: string): HTMLElement | undefined {
   )
 }
 
+function inputText(label: string, value: string) {
+  const input = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+async function submitWithEnter() {
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="Volume name"]')!
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  })
+}
+
+function selectStorage(value: string) {
+  const select = document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, value)
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
 describe('Volumes row action "New Box"', () => {
   let root: Root | null = null
 
@@ -98,6 +158,15 @@ describe('Volumes row action "New Box"', () => {
     state.empty = false
     state.volumeState = 'ready'
     state.errorReason = undefined
+    state.storageBackend = 'standard'
+    state.instance = undefined
+    state.capabilities = { object_storage_enabled: true, filestore_enabled: false }
+    state.capabilitiesLoading = false
+    state.capabilitiesFetching = false
+    state.capabilitiesError = false
+    state.createdVolume = undefined
+    state.createError = undefined
+    state.createPending = false
     state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES, OrganizationRolePermissionsEnum.WRITE_BOXES]
   })
 
@@ -309,5 +378,217 @@ describe('Volumes row action "New Box"', () => {
     // The volume-scoped controls are still there — the row was not hidden
     // wholesale.
     expect(rowAction('New Volume')).toBeDefined()
+  })
+})
+
+describe('Volumes storage selection', () => {
+  let root: Root | null = null
+
+  beforeAll(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    state.empty = false
+    state.volumeState = 'ready'
+    state.errorReason = undefined
+    state.storageBackend = 'standard'
+    state.instance = undefined
+    state.capabilities = { object_storage_enabled: true, filestore_enabled: false }
+    state.capabilitiesLoading = false
+    state.capabilitiesFetching = false
+    state.capabilitiesError = false
+    state.createdVolume = undefined
+    state.createError = undefined
+    state.createPending = false
+    state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES]
+  })
+
+  afterEach(() => {
+    act(() => root?.unmount())
+    root = null
+    document.body.innerHTML = ''
+    vi.unstubAllGlobals()
+  })
+
+  function renderPage() {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(<Volumes />)
+    })
+  }
+
+  it('defaults to standard storage and sends no implicit Filestore instance', async () => {
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('standard')
+    inputText('Volume name', 'shared-data')
+    await act(async () => rowAction('Create')!.click())
+
+    expect(state.createdVolume).toEqual({ name: 'shared-data', storageBackend: 'standard' })
+    expect(toast.success).toHaveBeenCalledWith('Creating volume shared-data')
+  })
+
+  it('keeps unconfigured Performance storage visible but disabled', () => {
+    renderPage()
+    act(() => rowAction('New Volume')?.click())
+
+    expect(document.querySelector<HTMLOptionElement>('option[value="performance"]')!.disabled).toBe(true)
+    expect(document.body.textContent).toContain('Performance storage is not configured on this deployment.')
+  })
+
+  it('creates a Performance volume through server assignment and immediate-ready copy', async () => {
+    state.capabilities = { object_storage_enabled: true, filestore_enabled: true }
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('standard')
+    selectStorage('performance')
+    inputText('Volume name', 'nfs-data')
+    await act(async () => rowAction('Create')!.click())
+
+    expect(state.createdVolume).toEqual({ name: 'nfs-data', storageBackend: 'performance' })
+    expect(Object.hasOwn(state.createdVolume!, 'instance')).toBe(false)
+    expect(toast.success).toHaveBeenCalledWith('Created volume nfs-data')
+    expect(document.body.textContent).not.toContain('It takes a few seconds to become ready.')
+  })
+
+  it('shows the detailed Filestore lookup error returned by the API', async () => {
+    state.capabilities = { object_storage_enabled: true, filestore_enabled: true }
+    state.createError = new BoxliteError(
+      "Could not look up Filestore instance 'projects/boxlite-dev-project/locations/us-east5-a/instances/boxlite-dev-shared': GCP PERMISSION_DENIED: file.instances.get denied",
+    )
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    selectStorage('performance')
+    inputText('Volume name', 'nfs-data')
+    await act(async () => rowAction('Create')!.click())
+
+    expect(toast.error).toHaveBeenCalledWith('Failed to create volume', {
+      description: state.createError.message,
+      action: undefined,
+    })
+  })
+
+  it('starts with the only configured backend and disables creation without one', async () => {
+    state.capabilities = { object_storage_enabled: false, filestore_enabled: true }
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('performance')
+    inputText('Volume name', 'nfs-data')
+    await act(async () => rowAction('Create')!.click())
+    expect(state.createdVolume).toEqual({ name: 'nfs-data', storageBackend: 'performance' })
+
+    act(() => root?.unmount())
+    root = null
+    document.body.innerHTML = ''
+
+    state.capabilities = { object_storage_enabled: false, filestore_enabled: false }
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    inputText('Volume name', 'unused')
+    expect(rowAction('Create')!.hasAttribute('disabled')).toBe(true)
+  })
+
+  it('waits for backend capabilities before submitting', () => {
+    state.capabilitiesLoading = true
+    renderPage()
+    act(() => rowAction('New Volume')?.click())
+    inputText('Volume name', 'shared-data')
+
+    expect(rowAction('Create')!.hasAttribute('disabled')).toBe(true)
+  })
+
+  it('resets storage to the default each time the dialog opens', () => {
+    state.capabilities = { object_storage_enabled: true, filestore_enabled: true }
+    renderPage()
+    act(() => rowAction('New Volume')?.click())
+    selectStorage('performance')
+    act(() => rowAction('Cancel')?.click())
+
+    act(() => rowAction('New Volume')?.click())
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('standard')
+  })
+
+  it('keeps Standard available when an older config omits the new capability fields', async () => {
+    state.capabilities = { filestore_enabled: false }
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    inputText('Volume name', 'legacy-standard')
+    await act(async () => rowAction('Create')!.click())
+
+    expect(state.createdVolume).toEqual({ name: 'legacy-standard', storageBackend: 'standard' })
+  })
+
+  it.each([
+    {
+      name: 'capabilities are loading',
+      arrange: () => {
+        state.capabilitiesLoading = true
+      },
+    },
+    {
+      name: 'no backend is available',
+      arrange: () => {
+        state.capabilities = { object_storage_enabled: false, filestore_enabled: false }
+      },
+    },
+    {
+      name: 'capability discovery failed',
+      arrange: () => {
+        state.capabilities = undefined
+        state.capabilitiesError = true
+      },
+    },
+  ])('does not submit with Enter while $name', async ({ arrange }) => {
+    arrange()
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    inputText('Volume name', 'must-not-create')
+    await submitWithEnter()
+
+    expect(state.createdVolume).toBeUndefined()
+  })
+
+  it('does not submit with Enter while creation is pending', async () => {
+    state.createPending = true
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    inputText('Volume name', 'must-not-create')
+    await submitWithEnter()
+
+    expect(state.createdVolume).toBeUndefined()
+  }, 30_000)
+
+  it('distinguishes capability discovery failure from a disabled backend and retries it', async () => {
+    state.capabilities = undefined
+    state.capabilitiesError = true
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+
+    expect(document.body.textContent).toContain('Could not load volume storage options')
+    expect(document.body.textContent).not.toContain('Performance storage is not configured')
+    await act(async () => rowAction('Retry')!.click())
+    expect(state.capabilitiesRefetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not label an unknown response storage backend as Standard', () => {
+    state.storageBackend = '11184809'
+    renderPage()
+
+    expect(document.querySelector('.resource-list-row')?.textContent).toContain('Unknown')
+    expect(document.querySelector('.resource-list-row')?.textContent).not.toContain('Standard')
+  })
+
+  it('shows only the storage backend', () => {
+    state.storageBackend = 'performance'
+    state.instance = 'boxlite-dev-shared'
+    renderPage()
+
+    expect(document.body.textContent).toContain('Performance')
+    expect(document.body.textContent).not.toContain('boxlite-dev-shared')
   })
 })
