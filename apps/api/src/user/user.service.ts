@@ -22,7 +22,7 @@ import { normalizeRegistrationEmail } from './registration-email'
 import { UserAlreadyExistsException } from './user-already-exists.exception'
 
 import { CommerceInternalClient } from '../commerce/commerce-internal.client'
-import { CommerceUnavailableError } from '../commerce/commerce.errors'
+import { CommerceConflictError, CommerceUnavailableError } from '../commerce/commerce.errors'
 import { ReferralRegistrationException } from '../exceptions/referral-registration.exception'
 
 function registrationExceptionType(error: unknown): string {
@@ -30,6 +30,18 @@ function registrationExceptionType(error: unknown): string {
     return error.code
   }
   return error instanceof UserAlreadyExistsException ? 'user_conflict' : 'internal'
+}
+
+// Commerce's answers refuse the sign-up with a code the client acts on; any
+// other failure is a bug and surfaces unchanged.
+function referralRefusal(error: unknown): unknown {
+  if (error instanceof CommerceConflictError) {
+    return new ReferralRegistrationException('referral_conflict')
+  }
+  if (error instanceof CommerceUnavailableError) {
+    return new ReferralRegistrationException('referral_unavailable')
+  }
+  return error
 }
 
 @Injectable()
@@ -46,8 +58,10 @@ export class UserService {
    * @param ctx the actor and reason recorded on registration business events.
    * @param referralCode the raw referral code sent with the request creating the account.
    * It is ignored when blank or when Commerce is not configured; otherwise it must
-   * resolve to the inviting organization, or no user is created.
-   * @throws ReferralRegistrationException when a referral code cannot be resolved.
+   * resolve to the inviting organization, and Commerce must accept the referral
+   * event sent before the account commits, or no user is created.
+   * @throws ReferralRegistrationException when a referral code cannot be resolved,
+   * the account has no email Commerce accepts, or Commerce refuses the referral event.
    */
   async create(createUserDto: CreateUserDto, ctx: Context, referralCode?: string): Promise<User> {
     const email = createUserDto.email ? normalizeRegistrationEmail(createUserDto.email) : undefined
@@ -71,7 +85,7 @@ export class UserService {
     await recordOutcomes(
       { name: 'user.registration', correlationId: createUserDto.id, ctx },
       async () => {
-        user.referredByOrganizationId = await this.resolveReferral(referralCode)
+        user.referredByOrganizationId = await this.resolveReferral(referralCode, user.email)
         return this.dataSource.transaction(async (em) => {
           try {
             await em.insert(User, user)
@@ -93,6 +107,13 @@ export class UserService {
             UserEvents.CREATED,
             new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
           )
+          if (user.referredByOrganizationId) {
+            try {
+              await this.commerce.publishReferralNewer(user.referredByOrganizationId, user)
+            } catch (error) {
+              throw referralRefusal(error)
+            }
+          }
           return created.find((value): value is Organization => value instanceof Organization)
         })
       },
@@ -103,19 +124,19 @@ export class UserService {
     return user
   }
 
-  private async resolveReferral(referralCode: string | undefined): Promise<string | null> {
+  private async resolveReferral(referralCode: string | undefined, email: string | undefined): Promise<string | null> {
     if (!referralCode?.trim() || !this.commerce.isConfigured()) {
       return null
+    }
+    if (!this.commerce.acceptsInviteeEmail(email)) {
+      throw new ReferralRegistrationException('referral_email_required')
     }
 
     let organizationId: string | null
     try {
       organizationId = await this.commerce.resolveReferralCode(referralCode)
     } catch (error) {
-      if (error instanceof CommerceUnavailableError) {
-        throw new ReferralRegistrationException('referral_unavailable')
-      }
-      throw error
+      throw referralRefusal(error)
     }
     if (!organizationId) {
       throw new ReferralRegistrationException('invalid_referral_code')
