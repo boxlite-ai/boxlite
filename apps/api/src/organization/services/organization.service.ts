@@ -135,6 +135,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     this.nestedVirtualizationCache.delete(organizationId)
   }
 
+  @WithInstrumentation('organization.nested_virtualization')
   async isNestedVirtualizationEnabled(organizationId: string): Promise<boolean> {
     // TODO: 接受管理员修改在所有 API 实例最长 60 秒生效，优先减少热路径查询。
     const cacheEnabled = isEnableApiModuleCache(this.configService.get('apiModuleCache.enabled'), organizationId)

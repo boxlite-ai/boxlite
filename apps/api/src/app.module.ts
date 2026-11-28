@@ -8,6 +8,7 @@ import { Module, NestModule, MiddlewareConsumer, RequestMethod, ExecutionContext
 import { VersionHeaderMiddleware } from './common/middleware/version-header.middleware'
 import { FailedAuthRateLimitMiddleware } from './common/middleware/failed-auth-rate-limit.middleware'
 import { AppService } from './app.service'
+import { DatabaseTelemetry } from './common/utils/database-telemetry'
 import { UserModule } from './user/user.module'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { BoxModule } from './box/box.module'
@@ -223,7 +224,7 @@ import { McpModule } from './mcp/mcp.module'
     }),
   ],
   controllers: [],
-  providers: [AppService],
+  providers: [AppService, DatabaseTelemetry],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

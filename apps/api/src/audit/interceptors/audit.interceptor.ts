@@ -25,6 +25,7 @@ import { AuditService, PendingAuditLease } from '../services/audit.service'
 import { AuthContextType, isAuthContext } from '../../common/interfaces/auth-context.interface'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { AUDIT_WRITE_TIMEOUT_MS, remainingAuditTime } from '../audit-write-deadline'
+import { startTimedOperation } from '../../common/decorators/otel.decorator'
 
 type RequestWithUser = Request & {
   user?: AuthContextType
@@ -70,9 +71,11 @@ export class AuditInterceptor implements NestInterceptor {
     next: CallHandler,
     observer: Subscriber<any>,
   ): Promise<void> {
+    let preparation: ReturnType<typeof startTimedOperation> | undefined
     try {
       const deadline = performance.now() + AUDIT_WRITE_TIMEOUT_MS
       const asyncWrites = process.env.AUDIT_ASYNC_WRITES_ENABLED !== 'false'
+      preparation = startTimedOperation('audit.request_prepare', { 'audit.async_writes': asyncWrites })
       const actor = this.resolveActor(request.user)
       const input = {
         actorId: actor.actorId,
@@ -102,6 +105,8 @@ export class AuditInterceptor implements NestInterceptor {
         if (!asyncWrites) await lease.ready
         completeResponse = this.observeResponse(auditContext, auditLog, request, response, lease, !asyncWrites)
       }
+      preparation.finish()
+      preparation = undefined
       try {
         remainingAuditTime(deadline)
       } catch (error) {
@@ -145,6 +150,7 @@ export class AuditInterceptor implements NestInterceptor {
         observer.error(handlerError)
       }
     } catch (createLogError) {
+      preparation?.finish('error', createLogError)
       this.logger.error('Failed to create audit log:', createLogError)
       observer.error(
         createLogError instanceof ServiceUnavailableException ? createLogError : new InternalServerErrorException(),

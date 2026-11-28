@@ -216,13 +216,13 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
     const inserted = gate()
     const commit = gate()
     const pids: number[] = []
-    const originalInsert = EntityManager.prototype.insert
-    const insert = jest.spyOn(EntityManager.prototype, 'insert').mockImplementation(async function (
+    const originalQuery = EntityManager.prototype.query
+    const insert = jest.spyOn(EntityManager.prototype, 'query').mockImplementation(async function (
       this: EntityManager,
-      ...args: Parameters<EntityManager['insert']>
+      ...args: Parameters<EntityManager['query']>
     ) {
-      const result = await originalInsert.apply(this, args)
-      if (args[0] === Box && this.queryRunner?.isTransactionActive) {
+      const result = await originalQuery.apply(this, args)
+      if (String(args[0]).includes('WITH inserted_box AS') && this.queryRunner?.isTransactionActive) {
         const [{ pid }] = await this.query('SELECT pg_backend_pid() AS pid')
         pids.push(pid)
         if (pids.length === 2) inserted.open()
@@ -281,13 +281,13 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       if (args[0] === Box && this.queryRunner?.isTransactionActive) snapshots.push(result)
       return result
     })
-    const originalInsert = EntityManager.prototype.insert
-    const insert = jest.spyOn(EntityManager.prototype, 'insert').mockImplementation(async function (
+    const originalQuery = EntityManager.prototype.query
+    const insert = jest.spyOn(EntityManager.prototype, 'query').mockImplementation(async function (
       this: EntityManager,
-      ...args: Parameters<EntityManager['insert']>
+      ...args: Parameters<EntityManager['query']>
     ) {
-      const result = await originalInsert.apply(this, args)
-      if (args[0] === Box && (args[1] as Box).name === 'first-shared') {
+      const result = await originalQuery.apply(this, args)
+      if (String(args[0]).includes('WITH inserted_box AS') && Array.isArray(args[1]) && args[1].includes('first-shared')) {
         firstInserted.open()
         await releaseFirst.ready
       }
@@ -352,13 +352,16 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       await releaseCount.ready
       return result
     })
-    const originalInsert = EntityManager.prototype.insert
-    const insert = jest.spyOn(EntityManager.prototype, 'insert').mockImplementation(async function (
+    const originalQuery = EntityManager.prototype.query
+    const insert = jest.spyOn(EntityManager.prototype, 'query').mockImplementation(async function (
       this: EntityManager,
-      ...args: Parameters<EntityManager['insert']>
+      ...args: Parameters<EntityManager['query']>
     ) {
-      const result = await originalInsert.apply(this, args)
-      const attempt = higher.find(({ candidate }) => args[0] === Box && args[1] === candidate)
+      const result = await originalQuery.apply(this, args)
+      const attempt = higher.find(
+        ({ candidate }) =>
+          String(args[0]).includes('WITH inserted_box AS') && Array.isArray(args[1]) && args[1].includes(candidate.id),
+      )
       if (attempt) {
         attempt.inserted.open()
         await attempt.commit.ready
@@ -439,10 +442,17 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
   it('rolls back the Box and releases both locks when last-activity persistence fails', async () => {
     const candidate = newBox('activity-rolls-back')
     const failure = new Error('last activity unavailable')
-    const upsert = jest.spyOn(EntityManager.prototype, 'upsert').mockRejectedValueOnce(failure)
+    const originalQuery = EntityManager.prototype.query
+    const upsert = jest.spyOn(EntityManager.prototype, 'query').mockImplementation(async function (
+      this: EntityManager,
+      ...args: Parameters<EntityManager['query']>
+    ) {
+      if (String(args[0]).includes('WITH inserted_box AS')) throw failure
+      return originalQuery.apply(this, args)
+    })
     try {
       await expect(repository.insert(candidate, 100)).rejects.toBe(failure)
-      expect(upsert).toHaveBeenCalledTimes(1)
+      expect(upsert.mock.calls.filter(([sql]) => String(sql).includes('WITH inserted_box AS'))).toHaveLength(1)
       expect(await boxes.countBy({ organizationId })).toBe(0)
       expect(await admissionLocks(dataSource)).toEqual([])
     } finally {
@@ -582,6 +592,72 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
     } else {
       await expect(creating).rejects.toBeInstanceOf(BoxCreationLimitExceededError)
       expect(await boxes.countBy({ organizationId })).toBe(1)
+    }
+  })
+
+  it('writes a simple Box and its initial activity in one statement without an explicit transaction', async () => {
+    const afterWrite = jest.spyOn(repository as any, 'afterBoxWrite').mockResolvedValue(undefined)
+    const transaction = jest.spyOn(dataSource, 'transaction')
+    const query = jest.spyOn(dataSource.manager, 'query')
+    const entity = newBox('combined-insert')
+    entity.env = { NODE_ENV: 'test' }
+    entity.labels = { source: 'integration' }
+    entity.entrypoint = ['sh']
+    entity.cmd = ['-c', 'true']
+    entity.outboundEnabled = true
+    entity.outboundAllowNet = ['10.0.0.0/8']
+
+    try {
+      await repository.insert(entity)
+
+      const persisted = await boxes.findOneByOrFail({ id: entity.id })
+      expect(persisted.env).toEqual({ NODE_ENV: 'test' })
+      expect(persisted.labels).toEqual({ source: 'integration' })
+      expect(persisted.entrypoint).toEqual(['sh'])
+      expect(persisted.cmd).toEqual(['-c', 'true'])
+      expect(persisted.outboundAllowNet).toEqual(['10.0.0.0/8'])
+      const activity = await dataSource.query(
+        'SELECT "lastActivityAt" FROM box_last_activity WHERE "boxId"=$1',
+        [entity.id],
+      )
+      expect(activity[0].lastActivityAt).toEqual(persisted.createdAt)
+      expect(query.mock.calls.some(([sql]) => String(sql).includes('WITH inserted_box AS'))).toBe(true)
+      expect(transaction).not.toHaveBeenCalled()
+    } finally {
+      afterWrite.mockRestore()
+      transaction.mockRestore()
+      query.mockRestore()
+    }
+  })
+
+  it('keeps an additional persistence callback inside a transaction', async () => {
+    const afterWrite = jest.spyOn(repository as any, 'afterBoxWrite').mockResolvedValue(undefined)
+    const callback = jest.fn(async (manager: EntityManager) => {
+      expect(manager.queryRunner?.isTransactionActive).toBe(true)
+    })
+    try {
+      await repository.insert(newBox('callback-transaction'), undefined, callback)
+      expect(callback).toHaveBeenCalledTimes(1)
+    } finally {
+      afterWrite.mockRestore()
+    }
+  })
+
+  it('does not leave a Box when the combined activity write fails', async () => {
+    const afterWrite = jest.spyOn(repository as any, 'afterBoxWrite').mockResolvedValue(undefined)
+    await dataSource.query(`CREATE FUNCTION fail_box_activity() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'activity write refused'; END
+    $$`)
+    await dataSource.query(
+      'CREATE TRIGGER fail_box_activity BEFORE INSERT ON box_last_activity EXECUTE FUNCTION fail_box_activity()',
+    )
+    try {
+      await expect(repository.insert(newBox('activity-failure'))).rejects.toThrow('activity write refused')
+      expect(await boxes.countBy({ name: 'activity-failure' })).toBe(0)
+    } finally {
+      await dataSource.query('DROP TRIGGER fail_box_activity ON box_last_activity')
+      await dataSource.query('DROP FUNCTION fail_box_activity()')
+      afterWrite.mockRestore()
     }
   })
 })

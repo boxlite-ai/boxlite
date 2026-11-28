@@ -1315,6 +1315,22 @@ Runner and Region callers receive independent entity objects rather than a share
 instance. Cache hits do not require singleflight and multiple API instances can still each
 perform one backfill.
 
+Create entry tracing separates `auth.api_key_validate`, organization access/permission guards,
+`audit.request_prepare`, image and warm-pool work, Runner selection, and `box.repository_insert`; the
+existing `box.create_http`, `box.service_create`, and dispatch spans remain their parents or
+neighbors. Cache reads add `cache.name` and `cache.result` (`hit`, `miss`, or `bypass`) to the
+active span. TypeORM query-cache reads use `typeorm.query_cache_read` and report the actual result
+as `hit`, `miss`, or `stale`, rather than treating a singleflight join as a cache hit. PG, Redis,
+and HTTP automatic instrumentation remains enabled under the active parent span.
+
+`DatabaseTelemetry` exposes the current `pg.Pool` counts as `db_pool_connections_total`,
+`db_pool_connections_idle`, and `db_pool_requests_waiting`. Its `db_pool_connection_wait_duration`
+histogram wraps both Promise and Callback forms of `pool.connect()`, measuring connection checkout
+rather than SQL execution. Pool occupancy, checkout latency, and the query/create-entry spans can
+therefore be compared without connection identifiers or credentials in telemetry. The automatic
+HTTP span starts when Node accepts the request; correlating it with an earlier LB receipt timestamp
+still requires joining the LB's own request log or a trusted ingress timestamp.
+
 WebSocket attach reads API keys and users through `ApiKeyStrategy`'s read-only lookup methods,
 including key-bound ticket lookup by hash. Misses backfill the same Redis entries and TTLs as
 ordinary HTTP authentication, but attach does not update `lastUsedAt` or try Runner/Region

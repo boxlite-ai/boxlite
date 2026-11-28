@@ -11,6 +11,7 @@ import { TypedConfigService } from '../config/typed-config.service'
 import { BoxCreationAdmissionUnavailableError } from '../box/errors/box-creation-limit.error'
 import { WithInstrumentation } from '../common/decorators/otel.decorator'
 import { fetchCommerceOrganizationPlan } from '../common/utils/commerce-organization-plan.util'
+import { recordApiModuleCacheAccess } from '../common/utils/cache-metrics.util'
 
 export { withCommerceOrganizationPlanScope } from '../common/utils/commerce-organization-plan.util'
 
@@ -105,13 +106,16 @@ export class CommerceBoxLimitService {
       cached = await this.redis.get(cacheKey)
     } catch {
       this.logger.warn(`Failed to read Commerce box limit cache for ${cacheKey}; falling back to Commerce`)
+      recordApiModuleCacheAccess('commerce_box_limit', 'miss')
       return { hit: false }
     }
 
     if (cached === null) {
+      recordApiModuleCacheAccess('commerce_box_limit', 'miss')
       return { hit: false }
     }
     if (cached === UNLIMITED_CACHE_VALUE) {
+      recordApiModuleCacheAccess('commerce_box_limit', 'hit')
       return { hit: true, maxCreatedBoxes: undefined }
     }
 
@@ -119,11 +123,13 @@ export class CommerceBoxLimitService {
       const rawLimit = cached.slice(LIMIT_CACHE_VALUE_PREFIX.length)
       const limit = Number(rawLimit)
       if (/^(0|[1-9]\d*)$/.test(rawLimit) && Number.isSafeInteger(limit)) {
+        recordApiModuleCacheAccess('commerce_box_limit', 'hit')
         return { hit: true, maxCreatedBoxes: limit }
       }
     }
 
     this.logger.warn(`Ignoring invalid Commerce box limit cache value for ${cacheKey}`)
+    recordApiModuleCacheAccess('commerce_box_limit', 'miss')
     return { hit: false }
   }
 

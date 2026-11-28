@@ -30,6 +30,8 @@ import { UpdateRegionDto } from '../dto/update-region.dto'
 import { isEnableApiModuleCache } from '../../common/utils/api-module-cache.util'
 import { Singleflight } from '../../common/utils/singleflight.util'
 import { copyEntity } from '../../common/utils/entity-copy.util'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
+import { recordApiModuleCacheAccess } from '../../common/utils/cache-metrics.util'
 
 @Injectable()
 export class RegionService {
@@ -105,9 +107,11 @@ export class RegionService {
    * @param id - The ID of the region.
    * @returns The region if found, or null otherwise.
    */
+  @WithInstrumentation('region.lookup')
   async findOne(id: string, cache?: boolean): Promise<Region | null> {
     const cacheEnabled = cache ?? isEnableApiModuleCache(this.configService.get('apiModuleCache.enabled'))
     if (!cacheEnabled) {
+      recordApiModuleCacheAccess('region', 'bypass')
       return this.regionRepository.findOne({ where: { id } })
     }
 
