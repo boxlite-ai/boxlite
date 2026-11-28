@@ -174,22 +174,29 @@ impl ContainerInterface {
         let proto_mounts: Vec<BindMount> = mounts
             .into_iter()
             .map(|m| {
-                let (kind, subpath, record) = match m.payload {
+                let (kind, subpath, record, create_missing) = match m.payload {
                     crate::volumes::ContainerMountPayload::WholeDirectory => {
-                        (BindMountKind::WholeDirectory, String::new(), None)
+                        (BindMountKind::WholeDirectory, String::new(), None, false)
                     }
                     crate::volumes::ContainerMountPayload::SingleFile { file_name } => {
-                        (BindMountKind::SingleFile, file_name, None)
+                        (BindMountKind::SingleFile, file_name, None, false)
                     }
-                    crate::volumes::ContainerMountPayload::ManagedSubDirectory { sub_path } => {
-                        (BindMountKind::ManagedSubDirectory, sub_path, None)
-                    }
+                    crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+                        sub_path,
+                        create_missing,
+                    } => (
+                        BindMountKind::ManagedSubDirectory,
+                        sub_path,
+                        None,
+                        create_missing,
+                    ),
                     // The runtime mounts the directory as it mounts a whole
                     // directory; the guest records that mount under the key.
                     crate::volumes::ContainerMountPayload::RecordedDirectory { key, added } => (
                         BindMountKind::WholeDirectory,
                         String::new(),
                         Some((key, added)),
+                        false,
                     ),
                 };
                 BindMount {
@@ -205,6 +212,7 @@ impl ContainerInterface {
                         .map(|(key, _)| key.clone())
                         .unwrap_or_default(),
                     added: record.is_some_and(|(_, added)| added),
+                    create_missing,
                 }
             })
             .collect();
@@ -703,6 +711,7 @@ mod tests {
                     }),
                     mount(crate::volumes::ContainerMountPayload::ManagedSubDirectory {
                         sub_path: "team/backend".to_string(),
+                        create_missing: false,
                     }),
                 ],
                 ca_certs: Vec::new(),

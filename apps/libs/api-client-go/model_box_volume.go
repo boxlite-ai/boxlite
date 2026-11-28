@@ -27,8 +27,10 @@ type BoxVolume struct {
 	MountPath string `json:"mountPath"`
 	// The Filestore instance reference; absent for bucket-backed volumes
 	Filestore *BoxVolumeFilestoreRef `json:"filestore,omitempty"`
-	// Optional subpath within the volume to mount. When specified, only this S3 prefix will be accessible. When omitted, the entire volume is mounted.
+	// Optional relative subdirectory within the volume. Cloud read-write mounts create a missing subpath; cloud read-only mounts fail without creating it. When omitted, the entire volume is mounted.
 	Subpath *string `json:"subpath,omitempty"`
+	// Mount this Box read-only. The mount is enforced by the runtime, not only by the guest mount flags. Defaults to false.
+	ReadOnly *bool `json:"readOnly,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -165,6 +167,38 @@ func (o *BoxVolume) SetSubpath(v string) {
 	o.Subpath = &v
 }
 
+// GetReadOnly returns the ReadOnly field value if set, zero value otherwise.
+func (o *BoxVolume) GetReadOnly() bool {
+	if o == nil || IsNil(o.ReadOnly) {
+		var ret bool
+		return ret
+	}
+	return *o.ReadOnly
+}
+
+// GetReadOnlyOk returns a tuple with the ReadOnly field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *BoxVolume) GetReadOnlyOk() (*bool, bool) {
+	if o == nil || IsNil(o.ReadOnly) {
+		return nil, false
+	}
+	return o.ReadOnly, true
+}
+
+// HasReadOnly returns a boolean if a field has been set.
+func (o *BoxVolume) HasReadOnly() bool {
+	if o != nil && !IsNil(o.ReadOnly) {
+		return true
+	}
+
+	return false
+}
+
+// SetReadOnly gets a reference to the given bool and assigns it to the ReadOnly field.
+func (o *BoxVolume) SetReadOnly(v bool) {
+	o.ReadOnly = &v
+}
+
 func (o BoxVolume) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -182,6 +216,9 @@ func (o BoxVolume) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Subpath) {
 		toSerialize["subpath"] = o.Subpath
+	}
+	if !IsNil(o.ReadOnly) {
+		toSerialize["readOnly"] = o.ReadOnly
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -231,6 +268,7 @@ func (o *BoxVolume) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "mountPath")
 		delete(additionalProperties, "filestore")
 		delete(additionalProperties, "subpath")
+		delete(additionalProperties, "readOnly")
 		o.AdditionalProperties = additionalProperties
 	}
 

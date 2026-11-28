@@ -14,6 +14,7 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/runner/internal"
 	"github.com/boxlite-ai/runner/internal/metrics"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
 	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
 )
@@ -119,7 +120,10 @@ func (s *Service) newHealthcheck(nestedVirtualizationEnabled bool) *apiclient.Ru
 	healthcheck.SetSupportsPrivileged(true)
 	// The binary's filestore mount support is compiled in, so it is declared
 	// unconditionally: an API sees it from the first heartbeat after the upgrade.
-	healthcheck.SetCapabilities([]string{"filestore"})
+	// Mount options include both readOnly and subpath; a runner must not
+	// advertise only one half because guest/VMM/core support is one atomic
+	// implementation contract.
+	healthcheck.SetCapabilities([]string{"filestore", dto.VolumeMountOptionsCapability})
 	healthcheck.SetNestedVirtualizationEnabled(nestedVirtualizationEnabled)
 
 	proxyUrl := fmt.Sprintf("http://%s:%d", s.domain, s.proxyPort)

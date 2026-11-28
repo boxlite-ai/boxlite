@@ -65,7 +65,7 @@ describe('BoxLite lifecycle policy mapper', () => {
       volumes: [{ managed_volume: 'volume-123', guest_path: '/data', read_only: false }],
     })
 
-    expect(mapped.volumes).toEqual([{ volumeId: 'volume-123', mountPath: '/data' }])
+    expect(mapped.volumes).toEqual([{ volumeId: 'volume-123', mountPath: '/data', readOnly: false }])
   })
 
   // A name is as valid as an id here; VolumeService.validateVolumes resolves
@@ -75,7 +75,48 @@ describe('BoxLite lifecycle policy mapper', () => {
       volumes: [{ managed_volume: 'customer-data', guest_path: '/data', read_only: false }],
     })
 
-    expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data' }])
+    expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data', readOnly: false }])
+  })
+
+  it('does not let an empty mounts array erase legacy volumes', () => {
+    const mapped = createBoxToCreateBox({
+      volumes: [{ managed_volume: 'workspace', guest_path: '/workspace', read_only: false }],
+      mounts: [],
+    })
+    expect(mapped.volumes).toEqual([{ volumeId: 'workspace', mountPath: '/workspace', readOnly: false }])
+  })
+
+  it('marks typed mounts as requiring a capable runner even for whole-volume RW', () => {
+    const mapped = createBoxToCreateBox({
+      mounts: [{ type: 'volume', source: 'workspace', target: '/workspace' }],
+    })
+    expect(mapped.typedMountsRequested).toBe(true)
+    expect(mapped.volumes).toEqual([
+      { volumeId: 'workspace', mountPath: '/workspace', readOnly: undefined, subpath: undefined },
+    ])
+  })
+
+  it('maps mounts and volumes to the same internal shape', () => {
+    expect(
+      createBoxToCreateBox({
+        mounts: [
+          {
+            type: 'volume',
+            source: 'volume-123',
+            target: '/workspace',
+            read_only: true,
+            sub_path: 'team/backend',
+          },
+        ],
+      }).volumes,
+    ).toEqual([
+      {
+        volumeId: 'volume-123',
+        mountPath: '/workspace',
+        readOnly: true,
+        subpath: 'team/backend',
+      },
+    ])
   })
 
   it('maps REST secret specs to secret placeholder rules', () => {

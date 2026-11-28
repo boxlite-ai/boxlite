@@ -8,6 +8,7 @@ import 'reflect-metadata'
 import { BadRequestException, CallHandler, ExecutionContext, ValidationPipe } from '@nestjs/common'
 import { PIPES_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
+import { ConfigService } from '@nestjs/config'
 import { firstValueFrom, of } from 'rxjs'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
@@ -196,7 +197,7 @@ describe('BoxliteBoxController permissions', () => {
 describe('BoxliteBoxController volume attachment authorization', () => {
   const { READ_VOLUMES, WRITE_VOLUMES, WRITE_BOXES } = OrganizationResourcePermission
 
-  function makeController() {
+  function makeController(config?: ConfigService) {
     const boxService = {
       create: jest.fn().mockResolvedValue({ id: 'box-1', state: 'started' }),
       toBoxDto: jest.fn(),
@@ -208,6 +209,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       boxStateWaiter as any,
       commerceBoxLimitService as any,
       {} as any,
+      config,
     )
     return { controller, boxService }
   }
@@ -237,6 +239,44 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   }
 
   const dtoWithVolume = { image: 'alpine:latest', volumes: [{ managed_volume: 'vol_1', guest_path: '/data' }] } as any
+
+  it('rejects read-only managed volumes until the rollout flag is enabled', async () => {
+    const { controller, boxService } = makeController()
+    const dto = {
+      image: 'alpine:latest',
+      volumes: [{ managed_volume: 'vol_1', guest_path: '/data', read_only: true }],
+    } as any
+
+    await expect(
+      controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES, WRITE_VOLUMES]), dto, Context.user()),
+    ).rejects.toThrow('VOLUME_READ_ONLY_DISABLED')
+    expect(boxService.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects typed mounts until the rollout flag is enabled', async () => {
+    const { controller, boxService } = makeController()
+    const dto = {
+      image: 'alpine:latest',
+      mounts: [{ type: 'volume', source: 'vol_1', target: '/data' }],
+    } as any
+
+    await expect(
+      controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES, WRITE_VOLUMES]), dto, Context.user()),
+    ).rejects.toThrow('VOLUME_MOUNT_OPTIONS_DISABLED')
+    expect(boxService.create).not.toHaveBeenCalled()
+  })
+
+  it('accepts mount options after both rollout flags are enabled', async () => {
+    const config = new ConfigService({ volume: { readOnlyEnabled: true, typedMountsEnabled: true } })
+    const { controller, boxService } = makeController(config)
+    const dto = {
+      image: 'alpine:latest',
+      mounts: [{ type: 'volume', source: 'vol_1', target: '/data', read_only: true }],
+    } as any
+
+    await controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES, WRITE_VOLUMES]), dto, Context.user())
+    expect(boxService.create).toHaveBeenCalledTimes(1)
+  })
 
   it('refuses a WRITE_BOXES-only key that attaches a volume', async () => {
     const { controller, boxService } = makeController()

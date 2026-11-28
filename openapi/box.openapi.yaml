@@ -3690,10 +3690,14 @@ components:
             `volume_read_only_enabled`.
         sub_path:
           type: string
+          minLength: 1
           description: >
-            Relative subtree inside a `type=volume` source. It must already exist
-            and cannot traverse out through symlinks. Supported only when the
-            server advertises `typed_mounts_enabled`.
+            Relative subtree inside a `type=volume` source. It cannot traverse
+            out through symlinks. A local `boxlite serve` requires it to exist;
+            a cloud read-write mount creates missing directories inside the
+            volume, while every read-only mount requires it to exist and writes
+            nothing to the volume. Supported only when the server advertises
+            `typed_mounts_enabled`.
 
     VolumeSpec:
       type: object

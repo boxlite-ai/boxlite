@@ -8,6 +8,9 @@ type VolumeDTO struct {
 	VolumeId  string  `json:"volumeId"`
 	MountPath string  `json:"mountPath"`
 	Subpath   *string `json:"subpath,omitempty"`
+	// ReadOnly applies to this Box's mount only; it never changes the shared
+	// backend. Old dispatch payloads omit the field and remain read-write.
+	ReadOnly bool `json:"readOnly,omitempty"`
 	// Filestore, when set, switches this volume to a GCP Filestore NFS mount.
 	// VolumeId always carries the volume's global id and names the NFS data
 	// directory; Filestore only changes the mount backend, the two fields are

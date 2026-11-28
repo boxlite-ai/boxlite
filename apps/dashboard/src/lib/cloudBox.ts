@@ -34,6 +34,7 @@ export type BoxVolumeMount = {
   /** Volume id or name; the API resolves either. */
   volumeId: string
   mountPath: string
+  readOnly?: boolean
 }
 
 export type CreateBoxParams = {
@@ -68,7 +69,7 @@ export type BoxApiCreateRequest = {
   auto_resume?: boolean
   // The REST boundary takes a managed volume + guest path, not the internal
   // {volumeId, mountPath} pair the API maps it onto (box-to-box.mapper.ts).
-  volumes?: { managed_volume: string; guest_path: string }[]
+  volumes?: { managed_volume: string; guest_path: string; read_only?: boolean }[]
 }
 
 export type BoxApiBoxResponse = {
@@ -108,6 +109,7 @@ export function toBoxApiCreateRequest(params?: CreateBoxParams): BoxApiCreateReq
           // `volumeId` may be an id or a name; the API resolves either.
           managed_volume: mount.volumeId,
           guest_path: mount.mountPath,
+          read_only: mount.readOnly,
         }))
       : undefined,
   }

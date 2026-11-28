@@ -12,6 +12,7 @@ docs/BoxInfoResponse.md
 docs/BoxliteApi.md
 docs/CreateBoxDTO.md
 docs/DefaultApi.md
+docs/DtoFilestoreRef.md
 docs/DtoSecretDTO.md
 docs/DtoVolumeDTO.md
 docs/EnumsBoxState.md
@@ -30,6 +31,7 @@ git_push.sh
 index.ts
 models/box-info-response.ts
 models/create-box-dto.ts
+models/dto-filestore-ref.ts
 models/dto-secret-dto.ts
 models/dto-volume-dto.ts
 models/enums-box-state.ts

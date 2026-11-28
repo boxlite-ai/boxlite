@@ -899,6 +899,12 @@ const docTemplate = `{
                 "appVersion": {
                     "type": "string"
                 },
+                "capabilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "metrics": {
                     "$ref": "#/definitions/RunnerMetrics"
                 },
@@ -1056,6 +1062,9 @@ const docTemplate = `{
                 },
                 "mountPath": {
                     "type": "string"
+                },
+                "readOnly": {
+                    "type": "boolean"
                 },
                 "subpath": {
                     "type": "string"

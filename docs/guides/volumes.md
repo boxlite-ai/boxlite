@@ -66,9 +66,11 @@ boxlite run --rm \
   alpine:latest
 ```
 
-`sub_path` must name an existing directory inside the volume. It cannot be absolute, contain `.` or
-`..`, or contain a symlink. Only that subdirectory is visible at the mount target; sibling
-directories are not mounted. A missing directory returns `NotFound` and is not created implicitly.
+`sub_path` cannot be absolute, contain `.` or `..`, or contain a symlink. Only that subdirectory is
+visible at the mount target; sibling directories are not mounted. Local `boxlite serve` requires the
+directory to exist and returns `NotFound` without creating it. Cloud read-write mounts create a
+missing subdirectory inside the volume; cloud read-only mounts require it to exist and never write
+to the volume.
 
 The legacy `-v` syntax supports read-only mounts but not `sub_path`. CLI typed mounts support only
 `type=volume`; host binds continue to use `-v`.

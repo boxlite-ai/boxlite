@@ -44,7 +44,12 @@ export function BoxOverview({
       )
     : undefined
   const mountedVolumes = useMemo(() => {
-    const mounts = (box?.volumes ?? []) as { volumeId: string; mountPath: string; subpath?: string }[]
+    const mounts = (box?.volumes ?? []) as {
+      volumeId: string
+      mountPath: string
+      subpath?: string
+      readOnly?: boolean
+    }[]
     return mounts.map((mount) => {
       const match = allVolumes.find((v) => v.id === mount.volumeId || v.name === mount.volumeId)
       return { ...mount, displayName: match?.name ?? mount.volumeId }
@@ -160,6 +165,7 @@ export function BoxOverview({
                           <code>
                             {mount.mountPath}
                             {mount.subpath ? ` (${mount.subpath})` : ''}
+                            {mount.readOnly ? ' · read-only' : ''}
                           </code>
                         </td>
                       </tr>

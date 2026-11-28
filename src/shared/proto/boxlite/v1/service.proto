@@ -486,6 +486,10 @@ message BindMount {
   // The directory was saved while the box was stopped: its target must be
   // empty and reached through no symbolic link, and its owner is not remapped.
   bool added = 9;
+  // Internal cloud-volume hint: create missing relative directories under the
+  // shared volume root before resolving them. Only a current host sets this,
+  // and only for read-write cloud mounts. It is not a public create flag.
+  bool create_missing = 10;
 }
 
 message ContainerInitResponse {

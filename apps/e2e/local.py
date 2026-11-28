@@ -150,6 +150,7 @@ def base_env():
         "AWS_REGION": "us-east-1", "AWS_ACCESS_KEY_ID": "e2eadmin",
         "AWS_SECRET_ACCESS_KEY": credentials["RUSTFS_PASSWORD"], "AWS_DEFAULT_BUCKET": "boxlite",
         "VOLUME_STORAGE_BACKEND": "s3",
+        "VOLUME_READ_ONLY_ENABLED": "true", "TYPED_MOUNTS_ENABLED": "true",
         "BOXLITE_E2E_API_URL": api, "BOXLITE_E2E_ADMIN_KEY": credentials["ADMIN_KEY"],
         "BOXLITE_E2E_API_KEY": credentials["ADMIN_KEY"],
         "BOXLITE_REST_URL": api, "BOXLITE_HOME": str(STATE / "client-home"),

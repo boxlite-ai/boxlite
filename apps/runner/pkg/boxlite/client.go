@@ -604,7 +604,12 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	for _, vol := range volumeMounts {
 		// The bucket is already FUSE-mounted on this host, so the runner is a
 		// host-bind consumer even though the box is mounting a managed volume.
-		opts = append(opts, boxlite.WithBindMount(vol.hostPath, vol.mountPath))
+		// hostPath stays at the volume root; subPath and readOnly remain part
+		// of the mount configuration so guest resolution can enforce them.
+		opts = append(
+			opts,
+			boxlite.WithBindMountSubPath(vol.hostPath, vol.mountPath, vol.subPath, vol.readOnly),
+		)
 	}
 
 	if len(volumeMounts) > 0 {
@@ -760,10 +765,8 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 	defer operation.Close()
 	ctx = context.WithoutCancel(ctx)
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
-		if isFilestoreVolumePreparationError(err) {
-			return "", err
-		}
 		c.logger.ErrorContext(ctx, "failed to ensure volume mounts", "box", boxId, "error", err)
+		return "", err
 	}
 
 	bx, err := c.getOrFetchBox(ctx, boxId)

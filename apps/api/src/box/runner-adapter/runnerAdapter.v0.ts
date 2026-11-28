@@ -22,6 +22,7 @@ import {
 } from '@boxlite-ai/runner-api-client'
 import { Box } from '../entities/box.entity'
 import { memoryGiBOf } from '../utils/memory-allocation'
+import { toRunnerVolumes } from '../utils/runner-volume-mount-options'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
 
@@ -255,6 +256,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       appVersion: response.data.appVersion,
       supportsPrivileged: response.data.supportsPrivileged,
       nestedVirtualizationEnabled: response.data.nestedVirtualizationEnabled,
+      capabilities: response.data.capabilities,
     }
   }
 
@@ -316,6 +318,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       })),
       outboundEnabled: box.outboundEnabled,
       outboundAllowNet: box.outboundAllowNet ?? undefined,
+      volumes: toRunnerVolumes(box.volumes),
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,
@@ -391,11 +394,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         placeholder: secret.placeholder,
         headers: secret.headers,
       })),
-      volumes: box.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-      })),
+      volumes: toRunnerVolumes(box.volumes),
       outboundEnabled: box.outboundEnabled,
       outboundAllowNet: box.outboundAllowNet ?? undefined,
       errorReason: box.errorReason,

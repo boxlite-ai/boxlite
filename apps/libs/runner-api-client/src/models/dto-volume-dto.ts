@@ -13,9 +13,14 @@
  */
 
 
+// May contain unused imports in some cases
+// @ts-ignore
+import type { DtoFilestoreRef } from './dto-filestore-ref';
 
 export interface DtoVolumeDTO {
+    'filestore'?: DtoFilestoreRef;
     'mountPath'?: string;
+    'readOnly'?: boolean;
     'subpath'?: string;
     'volumeId'?: string;
 }

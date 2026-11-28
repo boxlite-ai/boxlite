@@ -15,8 +15,12 @@ use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::vmm::{PreparedKernel, controller::VmmHandler};
 use crate::volumes::{ContainerMount, GuestVolumeManager, VolumeShare, classify_volume_share};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::sync::mpsc::{RecvTimeoutError, channel};
+use std::thread;
+use std::time::Duration;
 
 /// Switch between merged and overlayfs rootfs strategies.
 /// - true: overlayfs (allows COW writes, keeps layers separate)
@@ -30,6 +34,10 @@ pub const USE_OVERLAYFS: bool = true;
 /// Disk-based rootfs is faster to start but requires more disk space.
 /// When enabled, USE_OVERLAYFS is ignored.
 pub const USE_DISK_ROOTFS: bool = true;
+
+/// Cloud roots live behind FUSE/NFS. A backend that attaches and then wedges
+/// can leave an uninterruptible stat alive, so the caller must stop waiting.
+const CLOUD_PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub enum ResolvedShareKind {
@@ -51,6 +59,11 @@ pub struct ResolvedVolume {
     /// Owner GID of host directory (for auto-idmap in guest).
     pub owner_gid: u32,
     pub kind: ResolvedShareKind,
+    /// Whether the guest may create missing subpath directories.
+    ///
+    /// Only cloud read-write mounts enable this. It must remain false for
+    /// local named volumes so their existing fail-closed contract is kept.
+    pub create_missing: bool,
 }
 
 fn managed_share_kind(mount: &crate::volumes::ResolvedLocalMount) -> ResolvedShareKind {
@@ -92,6 +105,9 @@ pub fn resolve_user_volumes(
 
     for (i, vol) in volumes.iter().enumerate() {
         if let Some(selector) = &vol.managed_volume {
+            if vol.has_cloud_compat_marker() {
+                continue;
+            }
             let mount = managed_by_id.remove(selector).ok_or_else(|| {
                 BoxliteError::Internal(format!("volume {selector} was not resolved for boot"))
             })?;
@@ -110,6 +126,7 @@ pub fn resolve_user_volumes(
                 owner_uid: metadata.uid(),
                 owner_gid: metadata.gid(),
                 kind,
+                create_missing: false,
             });
             continue;
         }
@@ -123,28 +140,65 @@ pub fn resolve_user_volumes(
             )));
         }
 
-        let resolved_path = host_path.canonicalize().map_err(|e| {
-            BoxliteError::Config(format!(
-                "Failed to resolve volume path '{}': {}",
-                vol.host_path, e
-            ))
-        })?;
-
-        // A directory is shared as-is; a single file keeps its own path here and
-        // is staged into a dedicated share dir later (see vmm_spawn), so virtio-fs
-        // never exposes the file's host siblings.
-        let (source_path, kind) = match classify_volume_share(&resolved_path) {
-            Some(VolumeShare::Dir(dir)) => (dir, ResolvedShareKind::Directory),
-            Some(VolumeShare::File(file_name)) => (
-                resolved_path.clone(),
-                ResolvedShareKind::SingleFile { file_name },
-            ),
-            None => {
-                return Err(BoxliteError::Config(format!(
-                    "Volume host path is not a file or directory: {}",
+        // Cloud volume roots are boundary directories, not caller-owned paths.
+        // lstat intentionally rejects a missing root or a symlink root before
+        // the guest resolver runs. Read-only preparation must not create it.
+        let (source_path, kind, create_missing) = if vol.cloud_volume {
+            let probe_path = host_path.clone();
+            let metadata =
+                cloud_path_metadata_bounded(&host_path, CLOUD_PATH_PROBE_TIMEOUT, move || {
+                    probe_path.symlink_metadata()
+                })
+                .map_err(|_| {
+                    BoxliteError::NotFound(format!(
+                        "Cloud volume host path does not exist: {}",
+                        vol.host_path
+                    ))
+                })?;
+            if !metadata.is_dir() {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "Cloud volume host path is not a real directory: {}",
                     vol.host_path
                 )));
             }
+            // Cloud uses the volume-root owner for idmap because a read-write
+            // subpath may not exist until the guest creates it. Local named
+            // volumes stat the selected directory instead; that difference is
+            // intentional and keeps creation independent of host-side races.
+            let sub_path = vol.sub_path.as_deref().unwrap_or("");
+            let kind = if sub_path.is_empty() {
+                ResolvedShareKind::ManagedDirectory
+            } else {
+                ResolvedShareKind::ManagedSubDirectory {
+                    sub_path: sub_path.to_owned(),
+                }
+            };
+            (host_path.clone(), kind, !vol.read_only)
+        } else {
+            let resolved_path = host_path.canonicalize().map_err(|e| {
+                BoxliteError::Config(format!(
+                    "Failed to resolve volume path '{}': {}",
+                    vol.host_path, e
+                ))
+            })?;
+
+            // A directory is shared as-is; a single file keeps its own path here and
+            // is staged into a dedicated share dir later (see vmm_spawn), so virtio-fs
+            // never exposes the file's host siblings.
+            let (source_path, kind) = match classify_volume_share(&resolved_path) {
+                Some(VolumeShare::Dir(dir)) => (dir, ResolvedShareKind::Directory),
+                Some(VolumeShare::File(file_name)) => (
+                    resolved_path.clone(),
+                    ResolvedShareKind::SingleFile { file_name },
+                ),
+                None => {
+                    return Err(BoxliteError::Config(format!(
+                        "Volume host path is not a file or directory: {}",
+                        vol.host_path
+                    )));
+                }
+            };
+            (source_path, kind, false)
         };
 
         let tag = format!("uservol{}", i);
@@ -152,10 +206,10 @@ pub fn resolve_user_volumes(
         // Owner comes from the mount target itself (file or dir) for guest idmap.
         let (owner_uid, owner_gid) = {
             use std::os::unix::fs::MetadataExt;
-            let meta = std::fs::metadata(&resolved_path).map_err(|e| {
+            let meta = std::fs::metadata(&source_path).map_err(|e| {
                 BoxliteError::Config(format!(
                     "Failed to stat volume path '{}': {}",
-                    resolved_path.display(),
+                    source_path.display(),
                     e
                 ))
             })?;
@@ -180,6 +234,7 @@ pub fn resolve_user_volumes(
             owner_uid,
             owner_gid,
             kind,
+            create_missing,
         });
     }
 
@@ -210,6 +265,7 @@ pub fn resolve_user_volumes(
                     owner_uid: metadata.uid(),
                     owner_gid: metadata.gid(),
                     kind,
+                    create_missing: false,
                 });
             }
             crate::runtime::options::MountType::Bind => {
@@ -218,6 +274,8 @@ pub fn resolve_user_volumes(
                     host_path: source.to_owned(),
                     guest_path: mount.target.clone(),
                     read_only: mount.read_only,
+                    sub_path: mount.sub_path.clone(),
+                    cloud_volume: false,
                 };
                 resolved.extend(resolve_user_volumes(&[bind], &[], store)?);
             }
@@ -228,6 +286,42 @@ pub fn resolve_user_volumes(
     }
 
     Ok(resolved)
+}
+
+/// Run a cloud-backed path probe with a caller-visible deadline.
+///
+/// The kernel syscall cannot be interrupted, so on timeout the worker thread
+/// stays parked until FUSE/NFS answers. That leaked thread is preferable to
+/// parking box initialization behind a wedged backend.
+fn cloud_path_metadata_bounded<T>(
+    path: &Path,
+    timeout: Duration,
+    operation: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> BoxliteResult<T>
+where
+    T: Send + 'static,
+{
+    let (sender, receiver) = channel();
+    thread::spawn(move || {
+        let _ = sender.send(operation());
+    });
+
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => result.map_err(|_| {
+            BoxliteError::NotFound(format!(
+                "Cloud volume host path does not exist: {}",
+                path.display()
+            ))
+        }),
+        Err(RecvTimeoutError::Timeout) => Err(BoxliteError::Config(format!(
+            "VOLUME_PROBE_TIMEOUT: cannot inspect cloud path {} within {}ms",
+            path.display(),
+            timeout.as_millis()
+        ))),
+        Err(RecvTimeoutError::Disconnected) => Err(BoxliteError::Internal(
+            "cloud path probe worker closed without returning a result".into(),
+        )),
+    }
 }
 
 /// Result of rootfs preparation - either merged, separate layers, or disk image.
@@ -496,6 +590,7 @@ mod tests {
             host_path: tmp.path().to_str().unwrap().to_string(),
             guest_path: "/data".to_string(),
             read_only: false,
+            ..Default::default()
         }];
         let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
             crate::runtime::options::BoxliteOptions {
@@ -729,6 +824,7 @@ mod tests {
             host_path: file_path.to_str().unwrap().to_string(),
             guest_path: "/etc/app.conf".to_string(),
             read_only: true,
+            ..Default::default()
         }];
         let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
             crate::runtime::options::BoxliteOptions {
@@ -825,5 +921,19 @@ mod tests {
             reason.contains(&err_display),
             "error_reason should round-trip BoxliteError::Display; got {reason:?}"
         );
+    }
+    #[test]
+    fn cloud_path_metadata_bounded_times_out_a_wedged_backend() {
+        let error = cloud_path_metadata_bounded(
+            Path::new("/mnt/wedged-cloud"),
+            Duration::from_millis(10),
+            || {
+                thread::sleep(Duration::from_millis(50));
+                Ok(())
+            },
+        )
+        .expect_err("a timed-out cloud probe must fail");
+
+        assert!(error.to_string().contains("VOLUME_PROBE_TIMEOUT"));
     }
 }

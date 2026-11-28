@@ -6,7 +6,7 @@
 
 import { ApiHideProperty, ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxState } from '../enums/box-state.enum'
-import { IsEnum, IsOptional } from 'class-validator'
+import { IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator'
 import { IMAGE_PREPARATION_RETRY_AFTER_MS } from '../constants/box-progress.constant'
 import { Box } from '../entities/box.entity'
 import { memoryGiBOf } from '../utils/memory-allocation'
@@ -68,12 +68,14 @@ export class BoxVolume {
     description: 'The ID of the volume (bucket-backed or Filestore-backed)',
     example: 'volume123',
   })
+  @IsString()
   volumeId: string
 
   @ApiProperty({
     description: 'The mount path for the volume',
     example: '/data',
   })
+  @IsString()
   mountPath: string
 
   /**
@@ -88,10 +90,21 @@ export class BoxVolume {
 
   @ApiPropertyOptional({
     description:
-      'Optional subpath within the volume to mount. When specified, only this S3 prefix will be accessible. When omitted, the entire volume is mounted.',
+      'Optional relative subdirectory within the volume. Cloud read-write mounts create a missing subpath; cloud read-only mounts fail without creating it. When omitted, the entire volume is mounted.',
     example: 'users/alice',
   })
+  @IsOptional()
+  @IsString()
   subpath?: string
+
+  @ApiPropertyOptional({
+    description:
+      'Mount this Box read-only. The mount is enforced by the runtime, not only by the guest mount flags. Defaults to false.',
+    example: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  readOnly?: boolean
 }
 
 @ApiSchema({ name: 'BoxSecret' })

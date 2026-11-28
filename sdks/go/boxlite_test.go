@@ -321,6 +321,37 @@ func TestBoxOptions(t *testing.T) {
 	}
 }
 
+func TestBindMountSubPathRejectsInvalidPathBeforeFFI(t *testing.T) {
+	cfg := &boxConfig{}
+	WithBindMountSubPath("/volume-root", "/workspace", "team/../backend", false)(cfg)
+
+	if _, err := buildCOptions("alpine:latest", cfg); err == nil ||
+		!strings.Contains(err.Error(), "VOLUME_SUBPATH_INVALID") {
+		t.Fatalf("buildCOptions error = %v, want VOLUME_SUBPATH_INVALID", err)
+	}
+}
+
+func TestWithBindMountSubPathKeepsCloudVolumeOptions(t *testing.T) {
+	cfg := &boxConfig{}
+	WithBindMountSubPath("/volume-root", "/workspace", "team/backend", true)(cfg)
+	whole := &boxConfig{}
+	WithBindMountSubPath("/volume-root", "/data", "", false)(whole)
+
+	if len(cfg.volumes) != 1 || len(whole.volumes) != 1 {
+		t.Fatalf("volumes: got %d and %d, want one each", len(cfg.volumes), len(whole.volumes))
+	}
+	ro := cfg.volumes[0]
+	rw := whole.volumes[0]
+	if ro.hostPath != "/volume-root" || ro.guestPath != "/workspace" || ro.subPath != "team/backend" ||
+		!ro.readOnly || !ro.cloudVolume {
+		t.Errorf("subpath read-only option: got %#v", ro)
+	}
+	if rw.hostPath != "/volume-root" || rw.guestPath != "/data" || rw.subPath != "" ||
+		rw.readOnly || !rw.cloudVolume {
+		t.Errorf("whole-volume read-write option: got %#v", rw)
+	}
+}
+
 func TestWithSecretPreservesHeaders(t *testing.T) {
 	secret := Secret{Name: "test", Value: "value", Hosts: []string{"api.example.com"}, Headers: map[string]string{"x-goog-api-key": "{value}"}}
 	config := &boxConfig{}

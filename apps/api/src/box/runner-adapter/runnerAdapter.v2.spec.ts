@@ -273,6 +273,49 @@ describe('RunnerAdapterV2 createBox', () => {
     )
   })
 
+  it('forwards volume mount options in the CREATE_BOX job payload', async () => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter, { config: { get: () => false } })
+    await adapter.init({ id: 'runner-1' } as any)
+
+    await adapter.createBox(
+      {
+        id: 'box-1',
+        image: 'base',
+        volumes: [
+          {
+            volumeId: 'volume-ro',
+            mountPath: '/data',
+            subpath: undefined,
+            readOnly: true,
+          },
+          {
+            volumeId: 'volume-subpath',
+            mountPath: '/workspace',
+            subpath: 'team/backend',
+            readOnly: false,
+          },
+        ],
+      } as any,
+      'base',
+    )
+
+    expect(jobService.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-1',
+      expect.objectContaining({
+        volumes: [
+          { volumeId: 'volume-ro', mountPath: '/data', subpath: undefined, readOnly: true },
+          { volumeId: 'volume-subpath', mountPath: '/workspace', subpath: 'team/backend', readOnly: false },
+        ],
+      }),
+    )
+  })
+
   /** The caller may pin a curated tag to the build this runner already has. */
   it('sends the image it is handed rather than the one on the box', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any

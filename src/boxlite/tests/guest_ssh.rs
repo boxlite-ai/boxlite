@@ -186,6 +186,7 @@ async fn check_ssh_start_policy(
         host_path: files.path().to_str().unwrap().into(),
         guest_path: "/proof".into(),
         read_only: false,
+        ..Default::default()
     }];
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),

@@ -21,7 +21,7 @@ import { RunnerAdapterV0 } from '../../runner-adapter/runnerAdapter.v0'
 import { ServiceUnavailableException } from '@nestjs/common'
 
 describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => {
-  function stoppedFilestoreFixture(adapter: any) {
+  function stoppedFilestoreFixture(adapter: any, readOnly = false, runnerCapabilities: string[] = []) {
     const box = new Box('region-1', 'filestore-box')
     box.runnerId = 'runner-1'
     box.state = BoxState.STOPPED
@@ -31,6 +31,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       {
         volumeId: 'volume-1',
         mountPath: '/data',
+        ...(readOnly ? { readOnly: true } : {}),
         filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
       },
     ] as any
@@ -40,7 +41,13 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       resolve: jest.fn().mockResolvedValue({ server: '10.0.0.9', export: '/vol2' }),
     }
     const action = new BoxStartAction(
-      { findOneOrFail: jest.fn(async () => ({ id: 'runner-1', state: RunnerState.READY })) } as any,
+      {
+        findOneOrFail: jest.fn(async () => ({
+          id: 'runner-1',
+          state: RunnerState.READY,
+          capabilities: runnerCapabilities,
+        })),
+      } as any,
       { create: jest.fn(async () => adapter) } as any,
       { update } as any,
       { findOne: jest.fn(async () => ({ boxMetadata: {} })) } as any,
@@ -61,7 +68,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       .fn()
       .mockRejectedValueOnce(capabilityError)
       .mockResolvedValueOnce(undefined)
-    const startBox = jest.fn(async () => undefined)
+    const startBox = jest.fn(async (_boxId: string, _token: string, _metadata: Record<string, string>) => undefined)
     const { box, lockCode, action, update } = stoppedFilestoreFixture({ assertFilestoreVolumeSupport, startBox })
 
     await expect((action as BoxAction).run(box, lockCode)).resolves.toBe(DONT_SYNC_AGAIN)
@@ -121,7 +128,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     box.desiredState = BoxDesiredState.STARTED
     box.pending = true
 
-    const ownRunner = { id: ownRunnerId, state: RunnerState.READY } as Runner
+    const ownRunner = { id: ownRunnerId, state: RunnerState.READY, capabilities: ['volume-mount-options'] } as Runner
 
     // findOneOrFail must return the runner that matches the requested id so we can
     // prove the action selected box.runnerId and nothing else.
@@ -197,11 +204,16 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       {
         volumeId: 'volume-1',
         mountPath: '/data',
+        readOnly: true,
         filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
       },
     ] as any
 
-    const ownRunner = { id: ownRunnerId, state: RunnerState.READY } as Runner
+    const ownRunner = {
+      id: ownRunnerId,
+      state: RunnerState.READY,
+      capabilities: ['volume-mount-options'],
+    } as Runner
     const runnerService = {
       findOneOrFail: jest.fn(async (id: string) => {
         if (id !== ownRunnerId) {
@@ -213,7 +225,14 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
 
     const startBox = jest.fn(async (_boxId: string, _token: string, _metadata: Record<string, string>) => undefined)
     const runnerAdapterFactory = {
-      create: jest.fn(async () => ({ startBox, assertFilestoreVolumeSupport: jest.fn(async () => undefined) }) as any),
+      create: jest.fn(
+        async () =>
+          ({
+            startBox,
+            assertFilestoreVolumeSupport: jest.fn(async () => undefined),
+            runnerInfo: jest.fn(async () => ({ capabilities: ['volume-mount-options'] })),
+          }) as any,
+      ),
     }
 
     const lockCode = new LockCode('lock-1')
@@ -257,9 +276,127 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
         volumeId: 'volume-1',
         mountPath: '/data',
         subpath: undefined,
+        readOnly: true,
         filestore: { instance: 'ml-scratch', server: '10.0.0.9', export: '/vol2' },
       },
     ])
+  })
+
+  it('normalizes a legacy trailing slash in restart metadata', async () => {
+    const ownRunnerId = 'runner-own-1'
+    const box = new Box('region-1', 'legacy-subpath-box')
+    box.runnerId = ownRunnerId
+    box.state = BoxState.STOPPED
+    box.desiredState = BoxDesiredState.STARTED
+    box.pending = true
+    box.volumes = [
+      {
+        volumeId: 'volume-1',
+        mountPath: '/data',
+        subpath: 'team/backend/',
+      },
+    ] as any
+
+    const startBox = jest.fn(async (_boxId: string, _token: string, _metadata: Record<string, string>) => undefined)
+    const action = new BoxStartAction(
+      { findOneOrFail: jest.fn(async () => ({ id: ownRunnerId, state: RunnerState.READY })) } as any,
+      {
+        create: jest.fn(async () => ({
+          startBox,
+          assertFilestoreVolumeSupport: jest.fn(async () => undefined),
+        })),
+      } as any,
+      { update: jest.fn(async () => box) } as any,
+      { findOne: jest.fn(async () => ({ boxMetadata: {} })) } as any,
+      { getOrThrow: () => 1 } as any,
+      { getCode: jest.fn(async () => new LockCode('lock-legacy-subpath')) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    )
+
+    await (action as BoxAction).run(box, new LockCode('lock-legacy-subpath'))
+
+    const metadata = startBox.mock.calls[0][2] as { volumes: string }
+    const volumes = JSON.parse(metadata.volumes)
+    expect(volumes[0].subpath).toBe('team/backend')
+  })
+
+  it('does not restart a read-only box on a runner without mount options', async () => {
+    const ownRunnerId = 'runner-own-1'
+    const box = new Box('region-1', 'readonly-box')
+    box.runnerId = ownRunnerId
+    box.state = BoxState.STOPPED
+    box.desiredState = BoxDesiredState.STARTED
+    box.pending = true
+    box.volumes = [{ volumeId: 'volume-1', mountPath: '/data', readOnly: true }] as any
+
+    const startBox = jest.fn(async () => undefined)
+    const runnerInfo = jest.fn(async () => ({ capabilities: ['volume-mount-options'] }))
+    const lockCode = new LockCode('lock-readonly-unsupported')
+    const update = jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
+      Object.assign(box, opts.updateData)
+      return box
+    })
+    const action = new BoxStartAction(
+      { findOneOrFail: jest.fn(async () => ({ id: ownRunnerId, state: RunnerState.READY, capabilities: [] })) } as any,
+      { create: jest.fn(async () => ({ startBox, runnerInfo })) } as any,
+      { update } as any,
+      { findOne: jest.fn(async () => ({ boxMetadata: {} })) } as any,
+      { getOrThrow: () => 1 } as any,
+      { getCode: jest.fn(async () => lockCode) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    )
+
+    await expect((action as BoxAction).run(box, lockCode)).resolves.toBe(DONT_SYNC_AGAIN)
+    expect(startBox).not.toHaveBeenCalled()
+    expect(runnerInfo).not.toHaveBeenCalled()
+    expect(box.state).toBe(BoxState.ERROR)
+    expect(update.mock.calls[0][1].updateData.errorReason).toContain('VOLUME_MOUNT_OPTIONS_UNSUPPORTED')
+  })
+
+  it('keeps a read-only restart retryable when the live capability probe is unavailable', async () => {
+    const ownRunnerId = 'runner-own-1'
+    const box = new Box('region-1', 'readonly-probe-box')
+    box.runnerId = ownRunnerId
+    box.state = BoxState.STOPPED
+    box.desiredState = BoxDesiredState.STARTED
+    box.pending = true
+    box.volumes = [{ volumeId: 'volume-1', mountPath: '/data', readOnly: true }] as any
+
+    const startBox = jest.fn(async () => undefined)
+    const runnerInfo = jest.fn(async () => {
+      throw new Error('network unavailable')
+    })
+    const lockCode = new LockCode('lock-readonly-probe')
+    const update = jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
+      Object.assign(box, opts.updateData)
+      return box
+    })
+    const action = new BoxStartAction(
+      {
+        findOneOrFail: jest.fn(async () => ({
+          id: ownRunnerId,
+          state: RunnerState.READY,
+          capabilities: ['volume-mount-options'],
+        })),
+      } as any,
+      { create: jest.fn(async () => ({ startBox, runnerInfo })) } as any,
+      { update } as any,
+      { findOne: jest.fn(async () => ({ boxMetadata: {} })) } as any,
+      { getOrThrow: () => 1 } as any,
+      { getCode: jest.fn(async () => lockCode) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    )
+
+    await expect((action as BoxAction).run(box, lockCode)).resolves.toBe(DONT_SYNC_AGAIN)
+    expect(startBox).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(box.state).toBe(BoxState.STOPPED)
   })
 
   it('moves a stopped box with no runner to ERROR (cross-runner recovery is not supported)', async () => {

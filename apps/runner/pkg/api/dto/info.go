@@ -4,6 +4,8 @@
 
 package dto
 
+const VolumeMountOptionsCapability = "volume-mount-options"
+
 type RunnerMetrics struct {
 	CurrentCpuLoadAverage        float64 `json:"currentCpuLoadAverage"`
 	CurrentCpuUsagePercentage    float64 `json:"currentCpuUsagePercentage"`
@@ -27,4 +29,7 @@ type RunnerInfoResponseDTO struct {
 	Metrics                     *RunnerMetrics       `json:"metrics,omitempty"`
 	AppVersion                  string               `json:"appVersion"`
 	SupportsPrivileged          bool                 `json:"supportsPrivileged"`
+	// v0 runners had no capabilities field. volume-mount-options is the atomic
+	// capability for readOnly/subpath and cannot be inferred from appVersion.
+	Capabilities []string `json:"capabilities,omitempty"`
 } //	@name	RunnerInfoResponseDTO

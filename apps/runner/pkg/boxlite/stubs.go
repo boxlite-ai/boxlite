@@ -33,6 +33,11 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 	if err := validateRecreatableSecrets(createDto.Secrets); err != nil {
 		return err
 	}
+	// Volume mount failures must surface before Destroy. A read-only missing
+	// root or malformed subpath is deterministic and must not cost the old Box.
+	if err := c.preflightRecoveryVolumes(ctx, createDto.Volumes); err != nil {
+		return err
+	}
 
 	if err := c.Destroy(ctx, boxId); err != nil {
 		c.logger.Warn("failed to destroy during recover", "error", err)

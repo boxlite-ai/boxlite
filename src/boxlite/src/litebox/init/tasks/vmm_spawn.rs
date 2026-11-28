@@ -240,6 +240,7 @@ async fn build_config(
                 vol.host_path.clone(),
                 crate::volumes::ContainerMountPayload::ManagedSubDirectory {
                     sub_path: sub_path.clone(),
+                    create_missing: vol.create_missing,
                 },
             ),
         };

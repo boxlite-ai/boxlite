@@ -66,7 +66,11 @@ describe('BoxLite REST routing', () => {
           useValue: new TypedConfigService(
             new ConfigService({
               checkpoint: { archivePrefix: 'gs://checkpoint-test/', enabled: true },
-              volume: { filestoreInstances: { instances: [] } },
+              volume: {
+                filestoreInstances: { instances: [] },
+                readOnlyEnabled: true,
+                typedMountsEnabled: true,
+              },
             }),
           ),
         },
@@ -308,6 +312,8 @@ describe('BoxLite REST routing', () => {
     expect(body.capabilities.inbound_update_enabled).toBe(true)
     expect(body.capabilities.checkpoints_enabled).toBe(true)
     expect(body.capabilities.exec_user_enabled).toBe(true)
+    expect(body.capabilities.volume_read_only_enabled).toBe(true)
+    expect(body.capabilities.typed_mounts_enabled).toBe(true)
   })
 
   // An older API ignores isPublic and would publish the port, so clients

@@ -267,7 +267,9 @@ type volumeEntry struct {
 	managedVolume string
 	hostPath      string
 	guestPath     string
+	subPath       string
 	readOnly      bool
+	cloudVolume   bool
 }
 
 // WithName sets a human-readable name for the box.
@@ -357,6 +359,47 @@ func WithBindMountReadOnly(hostPath, guestPath string) BoxOption {
 
 		c.volumes = append(c.volumes, volumeEntry{hostPath: hostPath, guestPath: guestPath, readOnly: true})
 	}
+}
+
+// WithBindMountSubPath binds one relative directory from a cloud-managed
+// volume root. An empty subPath selects the whole root.
+//
+// A read-only mount never creates anything. A read-write mount asks the guest
+// to create missing subpath components only inside hostRoot.
+func WithBindMountSubPath(hostRoot, guestTarget, subPath string, readOnly bool) BoxOption {
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+
+		c.volumes = append(c.volumes, volumeEntry{
+			hostPath:    hostRoot,
+			guestPath:   guestTarget,
+			subPath:     subPath,
+			readOnly:    readOnly,
+			cloudVolume: true,
+		})
+	}
+}
+
+// validateCloudBindSubPath applies the same component rules as the Runner and
+// guest. The C ABI cannot return a validation error, so rejecting here keeps a
+// malformed option from disappearing into a later guest-start failure.
+func validateCloudBindSubPath(subPath string) error {
+	if subPath == "" {
+		return nil
+	}
+	if strings.ContainsRune(subPath, 0) ||
+		strings.HasPrefix(subPath, "/") ||
+		strings.HasSuffix(subPath, "/") ||
+		len(subPath) > 4096 ||
+		strings.Count(subPath, "/") > 63 {
+		return fmt.Errorf("VOLUME_SUBPATH_INVALID: invalid subpath %q", subPath)
+	}
+	for _, component := range strings.Split(subPath, "/") {
+		if component == "" || component == "." || component == ".." || len(component) > 255 {
+			return fmt.Errorf("VOLUME_SUBPATH_INVALID: invalid subpath %q", subPath)
+		}
+	}
+	return nil
 }
 
 // WithManagedVolume mounts a managed volume into the box.
@@ -639,7 +682,19 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			C.free(unsafe.Pointer(cVolume))
 		} else {
 			cHost := toCString(volume.hostPath)
-			C.boxlite_options_add_bind_mount(cOpts, cHost, cGuest, readOnly)
+			if volume.cloudVolume {
+				if err := validateCloudBindSubPath(volume.subPath); err != nil {
+					C.free(unsafe.Pointer(cHost))
+					C.free(unsafe.Pointer(cGuest))
+					C.boxlite_options_free(cOpts)
+					return nil, err
+				}
+				cSub := toCString(volume.subPath)
+				C.boxlite_options_add_bind_mount_subdir(cOpts, cHost, cGuest, cSub, readOnly)
+				C.free(unsafe.Pointer(cSub))
+			} else {
+				C.boxlite_options_add_bind_mount(cOpts, cHost, cGuest, readOnly)
+			}
 			C.free(unsafe.Pointer(cHost))
 		}
 		C.free(unsafe.Pointer(cGuest))

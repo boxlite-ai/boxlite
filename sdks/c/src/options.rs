@@ -207,6 +207,26 @@ pub unsafe extern "C" fn boxlite_options_add_bind_mount(
     options_add_bind_mount(opts, host_path, guest_path, read_only)
 }
 
+/// Bind a directory from a cloud-managed volume root.
+///
+/// `sub_path` is a relative path below `host_path`; an empty string selects
+/// the whole root. The Go SDK validates it before calling this entry point;
+/// raw C callers must do the same, because invalid values otherwise fail later
+/// when the guest starts. When `read_only` is zero, the guest may create
+/// missing subpath components inside `host_path`. A read-only mount never
+/// creates or modifies the volume.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_add_bind_mount_subdir(
+    opts: *mut CBoxliteOptions,
+    host_path: *const c_char,
+    guest_path: *const c_char,
+    sub_path: *const c_char,
+    read_only: c_int,
+) {
+    unsafe { mark_checkpoint_override(opts) };
+    options_add_bind_mount_subdir(opts, host_path, guest_path, sub_path, read_only)
+}
+
 /// Mount a managed volume, addressed by its server-assigned id **or** by its
 /// name — the server resolves either.
 ///
@@ -616,6 +636,30 @@ pub unsafe fn options_add_bind_mount(
                 read_only: read_only != 0,
                 ..VolumeSpec::bind_mount(h, g)
             });
+        }
+    }
+}
+
+pub unsafe fn options_add_bind_mount_subdir(
+    handle: *mut OptionsHandle,
+    host_path: *const c_char,
+    guest_path: *const c_char,
+    sub_path: *const c_char,
+    read_only: c_int,
+) {
+    unsafe {
+        if handle.is_null() || host_path.is_null() || guest_path.is_null() || sub_path.is_null() {
+            return;
+        }
+        if let (Ok(h), Ok(g), Ok(s)) = (
+            c_str_to_string(host_path),
+            c_str_to_string(guest_path),
+            c_str_to_string(sub_path),
+        ) {
+            (*handle)
+                .options
+                .volumes
+                .push(VolumeSpec::cloud_bind_mount(h, g, s, read_only != 0));
         }
     }
 }

@@ -27,6 +27,7 @@ async fn verify_directory_volumes(count: usize) {
             host_path: directory.to_str().unwrap().to_owned(),
             guest_path: format!("/mnt/volume-{index}"),
             read_only: false,
+            ..Default::default()
         });
     }
     let bx = runtime.create(options, None).await.expect("create Box");

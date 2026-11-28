@@ -5,7 +5,9 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**filestore** | [**DtoFilestoreRef**](DtoFilestoreRef.md) |  | [optional] [default to undefined]
 **mountPath** | **string** |  | [optional] [default to undefined]
+**readOnly** | **boolean** |  | [optional] [default to undefined]
 **subpath** | **string** |  | [optional] [default to undefined]
 **volumeId** | **string** |  | [optional] [default to undefined]
 
@@ -15,7 +17,9 @@ Name | Type | Description | Notes
 import { DtoVolumeDTO } from './api';
 
 const instance: DtoVolumeDTO = {
+    filestore,
     mountPath,
+    readOnly,
     subpath,
     volumeId,
 };

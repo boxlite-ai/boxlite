@@ -4,7 +4,19 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator'
+import {
+  IsEnum,
+  IsObject,
+  IsOptional,
+  IsString,
+  IsNumber,
+  IsBoolean,
+  IsArray,
+  IsInt,
+  Min,
+  ValidateNested,
+} from 'class-validator'
+import { Type } from 'class-transformer'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { CpuAllocation } from '../utils/cpu-allocation'
@@ -217,7 +229,16 @@ export class CreateBoxDto {
   })
   @IsOptional()
   @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BoxVolume)
   volumes?: BoxVolume[]
+
+  /** Internal request-shape marker: a typed `mounts` request requires a runner
+   * that understands the typed contract, even when every mount is whole-volume
+   * read-write and therefore looks identical to a legacy volume after mapping. */
+  @IsOptional()
+  @IsBoolean()
+  typedMountsRequested?: boolean
 
   @ApiPropertyOptional({
     description: 'Secrets injected into outbound HTTPS request headers',

@@ -188,6 +188,10 @@ export class Box {
   })
   volumes: BoxVolume[] = []
 
+  /** Transient create-time marker for typed `mounts`; intentionally not a
+   * column. It only affects runner selection before the Box is inserted. */
+  requiresVolumeMountOptions?: boolean
+
   @Column({
     type: 'jsonb',
     default: [],

@@ -712,6 +712,12 @@ const configuration = {
     // Which object store backs volume buckets. Must match the runner's
     // VOLUME_STORAGE_BACKEND: the API creates the bucket the runner mounts.
     storageBackend: process.env.VOLUME_STORAGE_BACKEND || 's3',
+    // Rollout switches for the cloud mount-option API surface. They default
+    // off so an API deployed before its Runner fleet does not advertise
+    // readOnly/typed mounts. Turn them on per environment after the fleet is
+    // ready; the same values gate create admission below.
+    readOnlyEnabled: process.env.VOLUME_READ_ONLY_ENABLED === 'true',
+    typedMountsEnabled: process.env.TYPED_MOUNTS_ENABLED === 'true',
     // Filestore is a GCP deployment feature. The deployment turns it off on
     // other clouds; local APIs default to enabled so an explicit instance list
     // keeps working without hosted deployment metadata.

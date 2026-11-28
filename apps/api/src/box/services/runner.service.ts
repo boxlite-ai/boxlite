@@ -26,6 +26,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerAdapterFactory, RunnerInfo } from '../runner-adapter/runnerAdapter'
+import { VOLUME_MOUNT_OPTIONS_CAPABILITY } from '../utils/runner-volume-mount-options'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
@@ -312,7 +313,16 @@ export class RunnerService {
       where: runnerFilter,
     })
 
-    return runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+    const eligible = params.requiresVolumeMountOptions
+      ? runners.filter((runner) => runner.capabilities?.includes(VOLUME_MOUNT_OPTIONS_CAPABILITY))
+      : runners
+    if (params.requiresVolumeMountOptions && eligible.length === 0 && runners.length > 0) {
+      this.logger.warn(
+        `No runner advertises ${VOLUME_MOUNT_OPTIONS_CAPABILITY}; ${runners.length} otherwise eligible runner(s) were filtered`,
+      )
+    }
+
+    return eligible.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
   }
 
   /**
@@ -617,6 +627,7 @@ export class RunnerService {
                       signal: abortController.signal,
                       infoFailed: runnerInfoFailed,
                       nestedVirtualizationEnabled: runnerInfo?.nestedVirtualizationEnabled,
+                      capabilities: runnerInfo?.capabilities,
                     },
                   )
                 })(),
@@ -1041,6 +1052,7 @@ export class RunnerService {
  * condition, and must not re-spell the string to recognise it.
  */
 export const NO_AVAILABLE_RUNNERS = 'No available runners'
+export { VOLUME_MOUNT_OPTIONS_CAPABILITY }
 
 export class GetRunnerParams {
   regions?: string[]
@@ -1048,6 +1060,7 @@ export class GetRunnerParams {
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
   requiresPrivileged?: boolean
+  requiresVolumeMountOptions?: boolean
 }
 
 interface AvailabilityScoreParams {

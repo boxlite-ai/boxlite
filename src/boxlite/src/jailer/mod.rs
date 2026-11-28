@@ -340,7 +340,7 @@ fn build_path_access(
     // A managed volume names no host path, so there is nothing to grant; the
     // local runtime rejects one before boot anyway (`resolve_user_volumes`).
     for vol in volumes {
-        if vol.managed_volume.is_some() {
+        if vol.managed_volume.is_some() && !vol.has_cloud_compat_marker() {
             continue;
         }
         let p = PathBuf::from(&vol.host_path);
@@ -1088,12 +1088,14 @@ mod tests {
                 host_path: vol_ro.to_string_lossy().to_string(),
                 guest_path: "/mnt/input".to_string(),
                 read_only: true,
+                ..Default::default()
             },
             VolumeSpec {
                 managed_volume: None,
                 host_path: vol_rw.to_string_lossy().to_string(),
                 guest_path: "/mnt/output".to_string(),
                 read_only: false,
+                ..Default::default()
             },
         ];
 
@@ -1122,6 +1124,7 @@ mod tests {
             host_path: "/does/not/exist".to_string(),
             guest_path: "/mnt/data".to_string(),
             read_only: true,
+            ..Default::default()
         }];
 
         let paths = build_path_access(&layout, &volumes, &[]);
@@ -1147,6 +1150,7 @@ mod tests {
             host_path: file.to_string_lossy().to_string(),
             guest_path: "/etc/app.conf".to_string(),
             read_only: true,
+            ..Default::default()
         }];
 
         let paths = build_path_access(&layout, &volumes, &[]);
@@ -1400,6 +1404,7 @@ mod tests {
                 host_path: vol_dir.to_string_lossy().to_string(),
                 guest_path: "/mnt/data".to_string(),
                 read_only: false,
+                ..Default::default()
             }])
             .build()
             .unwrap();

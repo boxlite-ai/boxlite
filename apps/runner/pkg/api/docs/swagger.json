@@ -831,6 +831,12 @@
         "appVersion": {
           "type": "string"
         },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "metrics": {
           "$ref": "#/definitions/RunnerMetrics"
         },
@@ -977,6 +983,9 @@
         },
         "mountPath": {
           "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
         },
         "subpath": {
           "type": "string"

@@ -6,6 +6,8 @@ function createConfig(values: {
   objectStorageConfigured?: boolean
   filestoreSupported?: boolean
   filestoreInstanceCount?: number
+  readOnlyEnabled?: boolean
+  typedMountsEnabled?: boolean
 }) {
   return {
     get: (key: string) => {
@@ -13,6 +15,8 @@ function createConfig(values: {
       if (key === 'checkpoint.archivePrefix') return values.checkpoint?.archivePrefix
       if (key === 's3.endpoint') return values.objectStorageConfigured ? 'http://object-storage.test' : undefined
       if (key === 'volume.filestoreSupported') return values.filestoreSupported ?? true
+      if (key === 'volume.readOnlyEnabled') return values.readOnlyEnabled
+      if (key === 'volume.typedMountsEnabled') return values.typedMountsEnabled
       return undefined
     },
     getOrThrow: (key: string) => {
@@ -66,4 +70,19 @@ describe('volume storage capability discovery', () => {
       expect(controller.getConfig().capabilities.filestore_enabled).toBe(filestoreExpected)
     },
   )
+})
+
+describe('volume mount option capability discovery', () => {
+  it.each([
+    { readOnlyEnabled: undefined, typedMountsEnabled: undefined, expected: [false, false] },
+    { readOnlyEnabled: true, typedMountsEnabled: false, expected: [true, false] },
+    { readOnlyEnabled: false, typedMountsEnabled: true, expected: [false, true] },
+    { readOnlyEnabled: true, typedMountsEnabled: true, expected: [true, true] },
+  ])('advertises only explicitly enabled rollout flags: %j', ({ readOnlyEnabled, typedMountsEnabled, expected }) => {
+    const controller = new BoxliteConfigController(
+      createConfig({ readOnlyEnabled, typedMountsEnabled }),
+    )
+    expect(controller.getConfig().capabilities.volume_read_only_enabled).toBe(expected[0])
+    expect(controller.getConfig().capabilities.typed_mounts_enabled).toBe(expected[1])
+  })
 })

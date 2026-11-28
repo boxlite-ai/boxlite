@@ -8,6 +8,7 @@ import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { BoxRepository } from '../../repositories/box.repository'
 import { Box } from '../../entities/box.entity'
 import { BoxState } from '../../enums/box-state.enum'
+import { Runner } from '../../entities/runner.entity'
 import { DONT_SYNC_AGAIN, BoxAction, SYNC_AGAIN, SyncState } from './box.action'
 import { RunnerState } from '../../enums/runner-state.enum'
 import { RunnerService } from '../../services/runner.service'
@@ -21,6 +22,12 @@ import { CuratedImagePinService } from '../../../image/services/curated-image-pi
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
 import { boxVolumeForDispatch } from '../../utils/box-volume.util'
 import { FilestoreInstanceResolver } from '../../services/filestore-instance.resolver'
+import {
+  probeVolumeMountOptions,
+  requiresVolumeMountOptions,
+  runnerSupportsVolumeMountOptions,
+  VOLUME_MOUNT_OPTIONS_CAPABILITY,
+} from '../../utils/runner-volume-mount-options'
 
 import { resolveNestedVirtualization } from '../../runner-adapter/nested-virtualization-policy'
 
@@ -86,6 +93,26 @@ export class BoxStartAction extends BoxAction {
     const image = boxImageIsOrgOwned(box) ? box.image : await this.curatedImagePins.refFor(runner.id, box.image)
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+
+    if (requiresVolumeMountOptions(box.volumes)) {
+      const admission = await this.mountOptionsAdmission(
+        runner,
+        runnerAdapter,
+        this.configService.getOrThrow('runnerHealthTimeout') * 1000,
+      )
+      if (admission === 'retry') return DONT_SYNC_AGAIN
+      if (admission === 'blocked') {
+        await this.updateBoxState(
+          box,
+          BoxState.ERROR,
+          lockCode,
+          undefined,
+          'VOLUME_MOUNT_OPTIONS_UNSUPPORTED: runner does not support readOnly or subpath mounts',
+        )
+        return DONT_SYNC_AGAIN
+      }
+    }
+
     await runnerAdapter.createBox(
       this.withVolumes(box, volumes),
       image,
@@ -118,6 +145,26 @@ export class BoxStartAction extends BoxAction {
     }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+
+    if (requiresVolumeMountOptions(box.volumes)) {
+      const admission = await this.mountOptionsAdmission(
+        runner,
+        runnerAdapter,
+        this.configService.getOrThrow('runnerHealthTimeout') * 1000,
+      )
+      if (admission === 'retry') return DONT_SYNC_AGAIN
+      if (admission === 'blocked') {
+        this.logger.warn(`Runner ${runner.id} cannot start box ${box.id}: missing ${VOLUME_MOUNT_OPTIONS_CAPABILITY}`)
+        await this.updateBoxState(
+          box,
+          BoxState.ERROR,
+          lockCode,
+          undefined,
+          'VOLUME_MOUNT_OPTIONS_UNSUPPORTED: runner does not support readOnly or subpath mounts',
+        )
+        return DONT_SYNC_AGAIN
+      }
+    }
 
     let volumes: Box['volumes']
     try {
@@ -162,6 +209,24 @@ export class BoxStartAction extends BoxAction {
         }
       }),
     )
+  }
+
+  /**
+   * A stale capability row is not enough to change mount safety, and a probe
+   * that cannot run is not the same answer as "unsupported". Explicitly absent
+   * capability fails admission; a timeout or transport failure stays retryable.
+   */
+  private async mountOptionsAdmission(
+    runner: Runner,
+    runnerAdapter: { runnerInfo(signal?: AbortSignal): Promise<{ capabilities?: string[] }> },
+    timeoutMs: number,
+  ): Promise<'allowed' | 'blocked' | 'retry'> {
+    if (!runnerSupportsVolumeMountOptions(runner)) return 'blocked'
+    const probe = await probeVolumeMountOptions(runnerAdapter, timeoutMs)
+    if (probe.status === 'supported') return 'allowed'
+    if (probe.status === 'unsupported') return 'blocked'
+    this.logger.warn(`Runner ${runner.id} mount-options probe failed; start will be retried: ${probe.error.message}`)
+    return 'retry'
   }
 
   private withVolumes(box: Box, volumes: Box['volumes']): Box {

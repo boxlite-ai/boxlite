@@ -1370,9 +1370,10 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 | `--volume VOLUME` | `-v` | Mount a volume; repeatable (see [Volume Mount Syntax](#volume-mount-syntax)) |
 | `--mount type=volume,source=NAME,target=PATH[,readonly][,sub_path=DIR]` | — | Typed managed-volume mount; mutually exclusive with `-v` |
 
-`sub_path` selects an existing directory inside the volume and rejects absolute paths, `..`, and
-symlinks. Reusing the same canonical volume id twice in one box is rejected; use a different box or
-volume for each mount declaration.
+`sub_path` rejects absolute paths, `..`, and symlinks. Local `boxlite serve` requires the directory
+to exist; cloud read-write mounts create it, while cloud read-only mounts require it and never
+write to the volume. Reusing the same canonical volume id twice in one box is rejected; use a
+different box or volume for each mount declaration.
 
 ### `NetworkFlags`
 

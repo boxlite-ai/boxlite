@@ -336,14 +336,14 @@ describe('CreateBoxDto managed volumes', () => {
     }
   })
 
-  it('rejects read-only cloud volume mounts until the backend supports them', async () => {
+  it('accepts read-only cloud volume mounts now that the backend supports them', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
         volumes: [{ managed_volume: 'volume-123', guest_path: '/data', read_only: true }],
       }),
     )
 
-    expect(getReadOnlyConstraints(errors)).toHaveProperty('isIn')
+    expect(errors).toHaveLength(0)
   })
 
   it('rejects null read_only values', async () => {
@@ -353,7 +353,46 @@ describe('CreateBoxDto managed volumes', () => {
       }),
     )
 
-    expect(getReadOnlyConstraints(errors)).toHaveProperty('isIn')
+    expect(getReadOnlyConstraints(errors)).toHaveProperty('isBoolean')
+  })
+
+  it('treats an empty mounts array as absent', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ managed_volume: 'workspace', guest_path: '/workspace' }],
+        mounts: [],
+      }),
+    )
+    expect(errors).toHaveLength(0)
+  })
+
+  it('accepts a volume mount with a non-empty sub_path', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        mounts: [{ type: 'volume', source: 'workspace', target: '/workspace', sub_path: 'team/backend' }],
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects bind, empty sub_path, null sub_path, and mixed mount shapes', async () => {
+    for (const mounts of [
+      [{ type: 'bind', source: '/host/data', target: '/data' }],
+      [{ type: 'volume', source: 'workspace', target: '/workspace', sub_path: '' }],
+      [{ type: 'volume', source: 'workspace', target: '/workspace', sub_path: null }],
+    ]) {
+      const errors = await validate(plainToInstance(CreateBoxDto, { mounts }))
+      expect(errors.length).toBeGreaterThan(0)
+    }
+
+    const mixed = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ managed_volume: 'workspace', guest_path: '/workspace' }],
+        mounts: [{ type: 'volume', source: 'workspace', target: '/workspace' }],
+      }),
+    )
+    expect(JSON.stringify(mixed)).toContain('oneMountRequestShape')
   })
 })
 

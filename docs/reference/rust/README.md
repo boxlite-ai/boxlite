@@ -1238,6 +1238,8 @@ and REST create-box request carry a typed volume `mount`; other SDKs are phased
 in separately.
 `MountSpec::validate` refuses a relative `target`, a missing `source`,
 `sub_path` on a `Bind`, and an empty `sub_path`; create runs it for every mount.
+Local runtimes require a `volume` `sub_path` to exist. Cloud read-write mounts
+may create it inside the volume; cloud read-only mounts fail without writing.
 A runtime refuses the mounts it does not take rather than dropping them; use
 `volumes` where it takes none:
 
