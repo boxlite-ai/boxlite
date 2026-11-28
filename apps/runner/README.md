@@ -181,9 +181,10 @@ the in-process TTL caches under `pkg/cache/`.
 4. **`api.ApiServer.Start`** registers routes and binds the HTTP
    listener. Synchronous; blocks the main goroutine until SIGTERM.
 
-On `SIGTERM` the API server is given 5 s to drain (`Shutdown`), the
-context cancels, every background loop returns, and `boxlite.Client.Close()`
-tears down the Rust runtime.
+On `SIGTERM` or interrupt, the runner closes v2 job intake, requests a
+graceful VM shutdown and gives the HTTP server 5 s to drain. The outstanding
+job poll can finish during that shutdown. At process exit the root context is
+canceled and the BoxLite client closes the runtime.
 
 ---
 
@@ -900,6 +901,15 @@ first drains anything left in `IN_PROGRESS` from a previous run, then
 long-polls `JobsAPI.PollJobs` with `(timeout, limit)`. HTTP `408`
 returns are treated as "no work yet" (normal long-poll behavior); any
 other error backs off 5 s and retries.
+
+A long poll commits a claim before returning its response. During an orderly
+restart, the retiring runner lets an outstanding poll finish and leaves any
+batch received after intake closed in `IN_PROGRESS` for the replacement's
+startup scan. Jobs admitted before intake closed retain their process context.
+
+With the default 30 s poll, an idle restart may wait for the remainder of that
+poll. The wait ends 45 s after the stop signal and overlaps VM and HTTP shutdown.
+A forced kill, transport error or expired deadline can still leave a late claim.
 
 Each job is dispatched to a goroutine and handled in
 [`pkg/runner/v2/executor/executor.go`](pkg/runner/v2/executor/executor.go).

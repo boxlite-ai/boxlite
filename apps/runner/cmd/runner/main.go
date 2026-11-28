@@ -209,6 +209,9 @@ func run() int {
 	}
 
 	boxBackend := backend.NewBoxliteAdapter(boxliteClient)
+	intake, stopIntake := context.WithCancel(ctx)
+	defer stopIntake()
+	pollerDone := make(chan struct{})
 
 	if cfg.ApiVersion == 2 {
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
@@ -261,9 +264,12 @@ func run() int {
 		}
 
 		go func() {
+			defer close(pollerDone)
 			logger.Info("Starting poller service")
-			pollerService.Start(ctx)
+			pollerService.Start(ctx, intake)
 		}()
+	} else {
+		close(pollerDone)
 	}
 
 	apiServer := api.NewApiServer(api.ApiServerConfig{
@@ -291,16 +297,17 @@ func run() int {
 		logger.Error("API server error", "error", err)
 		return 1
 	case <-interruptChannel:
+		stopIntake()
+		// The default poll takes up to 30s. Overlap its drain with VM and HTTP
+		// shutdown and leave headroom inside the unit's 60s stop deadline.
+		pollDeadline, cancelDrain := context.WithTimeout(ctx, 45*time.Second)
+		defer cancelDrain()
 		logger.Info("Signal received, shutting down")
 
 		// Gracefully stop all running boxes BEFORE freeing the runtime / killing
 		// the API server. Without this step, the systemd SIGTERM that restarts
 		// this runner would kill libkrun mid-write, leaving boxes that can't
 		// re-boot (the original CL84LvGx7RBE incident).
-		//
-		// Timeout budget: 25s is well under systemd's default
-		// TimeoutStopSec=90s for the unit, leaving 60s+ for in-flight HTTP
-		// handlers and the deferred Close() that follows.
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := boxliteClient.Shutdown(shutdownCtx, 25*time.Second); err != nil {
 			logger.Warn("BoxLite graceful shutdown failed; boxes may be in inconsistent state", "error", err)
@@ -308,6 +315,11 @@ func run() int {
 		shutdownCancel()
 
 		apiServer.Stop()
+		select {
+		case <-pollerDone:
+		case <-pollDeadline.Done():
+			logger.Warn("Job poller did not drain before the shutdown deadline")
+		}
 		logger.Info("Shutdown complete")
 		return 143
 	}
