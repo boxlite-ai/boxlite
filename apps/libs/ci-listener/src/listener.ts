@@ -54,11 +54,13 @@ export interface ListenerHost {
 }
 interface Runtime {
   sets?: ScaleSetController
+  workersRestored?: boolean
   backend: ListenerBackend
   pool: WorkerPool
 }
 interface Session {
   setWork: ScaleSetWork
+  savedSets?: Map<string, string[]>
   planning: WorkQueue
   execution: WorkQueue
   lease: ExecutionLease
@@ -467,14 +469,38 @@ export class Listener {
         await this.settle(lease, wake)
       }
     }
+    session.savedSets ??= await ScaleSetController.recover(this.options.state, lease)
+    const jobs = records.filter((row) => row.key.startsWith('notice/')).map(pendingJob)
     const scopes = new Map(recovery.rows.map((row) => [row.record.key, row.scope]))
     const recovering = new Set(scopes.keys())
-    for (const [key, scope] of session.current) scopes.set(key, scope)
+    for (const key of [...session.savedSets.keys(), ...session.runtimes.keys()]) {
+      const current = session.current.get(key)
+      if (current) scopes.set(key, current)
+    }
+    for (const [key, scope] of jobs.length ? session.current : []) {
+      if (jobs.some((job) => matches(scope, job))) scopes.set(key, scope)
+    }
     for (const [key, scope] of scopes) {
       signal.throwIfAborted()
       try {
+        const notices: { row: StateRecord; label: string }[] = []
+        if (session.current.has(key)) {
+          for (const job of jobs) {
+            if (!matches(scope, job)) continue
+            const row = job.record
+            const labels = object(row.payload) ? row.payload.labels : undefined
+            const selection =
+              Array.isArray(labels) && labels.every((label): label is string => typeof label === 'string')
+                ? selectRunnerLabels(labels, this.worker.labels)
+                : undefined
+            if (selection) notices.push({ row, label: selection.label })
+            else await this.settle(lease, row)
+          }
+        }
+        const saved = session.savedSets?.get(key) ?? []
+        if (!recovering.has(key) && !saved.length && !notices.length && !session.runtimes.has(key)) continue
         const runtime = await this.runtime(session, key, scope)
-        await this.scheduleScaleSets(session, key, scope, runtime, records, signal, recovering.has(key))
+        await this.scheduleScaleSets(session, key, scope, runtime, notices, saved, signal, recovering.has(key))
       } catch (error) {
         signal.throwIfAborted()
         if (error instanceof LeaseLost || error instanceof StateCorrupt) throw error
@@ -497,7 +523,10 @@ export class Listener {
       }
     for (const [key, runtime] of session.runtimes) {
       if (session.current.has(key) || (await this.journal.scope(lease, key)).active) continue
-      await runtime.sets?.close()
+      if (runtime.sets) {
+        await runtime.sets.close()
+        session.savedSets = undefined
+      }
       await runtime.pool.close()
       await runtime.backend.close()
       session.runtimes.delete(key)
@@ -508,7 +537,8 @@ export class Listener {
     key: string,
     scope: ExecutionScope,
     runtime: Runtime,
-    records: readonly StateRecord[],
+    notices: readonly { row: StateRecord; label: string }[],
+    saved: readonly string[],
     signal: AbortSignal,
     recovering: boolean,
   ) {
@@ -536,29 +566,22 @@ export class Listener {
         },
         signal,
       )
-      try {
-        await controller.restore()
-      } catch (error) {
-        await controller.close()
-        throw error
-      }
       runtime.sets = controller
     }
     if (!current && runtime.sets) {
       await runtime.sets.close()
       runtime.sets = undefined
+      runtime.workersRestored = false
+      session.savedSets = undefined
     }
     if (current && runtime.sets) {
-      // Authenticated job observations seed classes. Only Actions messages admit work.
-      for (const row of records) {
-        if (!row.key.startsWith('notice/') || !matches(scope, pendingJob(row))) continue
-        const labels = object(row.payload) ? row.payload.labels : undefined
-        if (Array.isArray(labels) && labels.every((label): label is string => typeof label === 'string')) {
-          const selection = selectRunnerLabels(labels, this.worker.labels)
-          if (selection) await runtime.sets.observe(selection.label)
-        }
-        await this.settle(session.lease, row)
+      for (const label of saved) runtime.sets.restoreLabel(label)
+      session.savedSets?.delete(key)
+      if (recovering && !runtime.workersRestored) {
+        await runtime.sets.restoreWorkers()
+        runtime.workersRestored = true
       }
+      for (const row of runtime.sets.observe(notices)) await this.settle(session.lease, row)
     }
     const targets = runtime.sets?.targets() ?? []
     const demand = targets.some((target) => target.assigned > 0)

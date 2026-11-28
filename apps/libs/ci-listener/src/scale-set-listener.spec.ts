@@ -249,7 +249,32 @@ class ActionsFixture {
   }
 }
 
+function signedJob(job: number, status: 'queued' | 'completed' = 'queued', labels = ['boxlite']) {
+  const secret = Buffer.alloc(32, 1)
+  const raw = Buffer.from(
+    JSON.stringify({
+      action: status,
+      installation: { id: 1 },
+      repository: { id: 21, owner: { id: 7 } },
+      workflow_job: { id: job, run_id: 31, status, labels },
+    }),
+  )
+  return verifyWebhook(
+    {
+      raw,
+      event: 'workflow_job',
+      delivery: randomUUID(),
+      signature: 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex'),
+    },
+    secret,
+  )!
+}
+
 const scenarios = [
+  'keeps a queued wake when a zero-capacity poll reports another job completed',
+  'parks an empty session and wakes on a new signed notice during close',
+  'does not retry registration after the only queued job completes during backoff',
+  'replays a queued notice after takeover interrupts its first poll',
   'subtracts assigned jobs from acquired holds on an idle poll',
   'subtracts assigned jobs from acquired holds on reconnect',
   'reconciles acquired and replayed demand',
@@ -285,7 +310,8 @@ const scenarios = [
   'holds accepted quota through idle polls and an owner restart',
   'reuses a held slot after cancellation between statistics samples',
   'returns an undispatched reservation for a deleted set',
-  'rotates idle sessions through every page of restored specifications',
+  'gives every queued specification a turn beyond the session limit',
+  'recovers an occupied label past a full page of sleeping registrations',
   'credits work only to the original JIT runner',
   'rejects conflicting persisted request identities on restore',
   'opens a healthy specification while 64 sessions back off',
@@ -350,6 +376,8 @@ for (const storage of ['sqlite', 'postgres'])
         }
         let source: CredentialSource = { kind: 'pat', repository: 21, token: () => 'local-token' }
         if (
+          scenario === 'parks an empty session and wakes on a new signed notice during close' ||
+          scenario === 'does not retry registration after the only queued job completes during backoff' ||
           scenario === 'checks an organization runner group' ||
           scenario === 'starts an organization worker with the custom resource label'
         ) {
@@ -432,7 +460,23 @@ for (const storage of ['sqlite', 'postgres'])
         let maximum = 2
         let policyOwner: ExecutionLease | undefined
         let policyChecks: StateCheck[] | undefined
-        const start = () => {
+        const seedNotice = async (job: number, label: string) => {
+          await state.ingest([
+            {
+              key: 'notice/' + scope.installation.id + '/' + job,
+              expected: null,
+              payload: {
+                installationId: scope.installation.id,
+                accountId: 7,
+                repositoryId: 21,
+                job: { id: job, runId: 31 },
+                labels: [label],
+              },
+            },
+          ])
+        }
+        let started = false
+        const start = (queued = true) => {
           const controller = new AbortController()
           listener = new Listener({
             state,
@@ -446,7 +490,12 @@ for (const storage of ['sqlite', 'postgres'])
             },
             timing: { tickMs: 5, leaseMs: 450 },
           })
-          const task = listener.run(controller.signal)
+          const initial = !started
+          started = true
+          const task = (async () => {
+            if (initial && queued && !fixture.discoverCustom) await seedNotice(99999, 'boxlite')
+            await listener.run(controller.signal)
+          })()
           return async () => {
             controller.abort()
             await task
@@ -510,7 +559,7 @@ for (const storage of ['sqlite', 'postgres'])
                   ['boxlite'],
                 ).scaleSets,
                 authority: async () => new Set(['repo']),
-                charged: () => 0,
+                charged: () => 1,
                 releaseSupply: () => {},
                 creationReady: () => true,
                 policy: async () => ({ limits: [{ domain: 'organization' as const, maximum: 2 }] }),
@@ -538,14 +587,14 @@ for (const storage of ['sqlite', 'postgres'])
                   if (rest) return Response.json({ message: 'You have exceeded a secondary rate limit.' }, { status })
                   return new Response(null, { status, headers: limited ? { 'retry-after': '60' } : undefined })
                 })
-                await controller.restore()
+                controller.restoreLabel('boxlite')
                 await until(() => errors.length > 0)
                 const peer = jest.fn(async () => 'fresh')
                 expect(await work.refreshStatistics(peer, peer)).toBe(limited ? undefined : 'fresh')
                 expect(peer).toHaveBeenCalledTimes(limited ? 0 : 1)
                 return
               }
-              await controller.restore()
+              controller.restoreLabel('boxlite')
               await until(() => calls('/messages') > 0)
               const stats = () => calls('/tenant/_apis/runtime/runnerscalesets/9')
               const initial = stats()
@@ -635,7 +684,7 @@ for (const storage of ['sqlite', 'postgres'])
               new AbortController().signal,
             )
             stop = () => controller.close()
-            await controller.restore()
+            controller.restoreLabel('boxlite')
             await until(() => fixture.requests.includes('GET /messages'))
             fixture.publish(1, 1, [123])
             await until(() => fixture.sessions.length === 2)
@@ -704,6 +753,101 @@ for (const storage of ['sqlite', 'postgres'])
             expect([...fixture.throttledSets.values()]).toEqual(Array(64).fill(1))
             return
           }
+          if (scenario === 'keeps a queued wake when a zero-capacity poll reports another job completed') {
+            const polls = () => fixture.requests.filter((request) => request === 'GET /messages').length
+            maximum = 0
+            await seedNotice(903, 'boxlite')
+            stop = start(false)
+            await until(() => polls() === 1)
+            fixture.publish(1, 0, [], [{ messageType: 'JobCompleted', runnerRequestId: 902 }])
+            await until(() => polls() === 2)
+            maximum = 1
+            fixture.idle()
+            await until(
+              () =>
+                polls() >= 3 ||
+                fixture.requests.some((request) => request.startsWith('DELETE ') && request.includes('/sessions/')),
+            )
+            expect(polls()).toBe(3)
+            fixture.publish(2, 0, [903])
+            await until(() => fixture.acknowledged.includes(2))
+            expect(fixture.acquired).toEqual([[903]])
+            return
+          }
+          if (scenario === 'replays a queued notice after takeover interrupts its first poll') {
+            await seedNotice(903, 'boxlite')
+            stop = start(false)
+            await until(() => fixture.requests.includes('GET /messages'))
+            await stop()
+            expect(await state.read(['notice/0/903'])).toHaveLength(1)
+            stop = start(false)
+            await until(() => fixture.sessions.length === 2)
+            fixture.publish(1, 0, [903])
+            await until(() => fixture.acknowledged.includes(1))
+            await until(async () => !(await state.read(['notice/0/903'])).length)
+            expect(fixture.acquired).toEqual([[903]])
+            expect(await journal.used(scope.organization)).toBe(1)
+            return
+          }
+          if (scenario === 'does not retry registration after the only queued job completes during backoff') {
+            let registrations = 0
+            fetch.mockImplementation(async (input, options = {}) => {
+              if (new URL(String(input)).pathname.endsWith('/registration-token')) {
+                registrations++
+                return new Response(null, { status: 503 })
+              }
+              return fixture.fetch(input, options)
+            })
+            stop = start(false)
+            await listener!.receive(signedJob(904))
+            await until(() => report.mock.calls.some(([, , context]) => context?.retryAt !== undefined))
+            const deadline = report.mock.calls.find(([, , context]) => context?.retryAt !== undefined)![2]!.retryAt!
+            const before = registrations
+            expect(before).toBeGreaterThan(0)
+            await listener!.receive(signedJob(904, 'completed'))
+            expect(await state.read(['notice/1/904'])).toEqual([])
+            await until(() => Date.now() >= deadline + 100)
+            expect(registrations).toBe(before)
+            return
+          }
+          if (scenario === 'parks an empty session and wakes on a new signed notice during close') {
+            let closing = false
+            let resume!: () => void
+            const release = new Promise<void>((resolve) => {
+              resume = resolve
+            })
+            fetch.mockImplementation(async (input, options = {}) => {
+              if (options.method === 'DELETE' && new URL(String(input)).pathname.includes('/sessions/')) {
+                closing = true
+                await release
+              }
+              return fixture.fetch(input, options)
+            })
+            try {
+              stop = start(false)
+              const first = signedJob(901)
+              expect(await listener!.receive(first)).toBe('stored')
+              expect(await listener!.receive(first)).toBe('duplicate')
+              await until(() => fixture.requests.includes('GET /messages'))
+              fixture.idle()
+              await until(() => closing || fixture.requests.filter((request) => request === 'GET /messages').length > 1)
+              expect(closing).toBe(true)
+              expect(fixture.sessions).toHaveLength(1)
+              expect(await listener!.receive(signedJob(902))).toBe('stored')
+              await until(() =>
+                observe.mock.calls.some(([event]) => event.event === 'ci-job-notification' && event.jobId === 902),
+              )
+              resume()
+              await until(() => fixture.sessions.length === 2)
+              fixture.publish(1, 0, [902])
+              await until(() => fixture.acknowledged.includes(1))
+              expect(fixture.acquired).toEqual([[902]])
+              expect(await journal.used(scope.organization)).toBe(1)
+            } finally {
+              resume()
+            }
+            return
+          }
           if (scenario === 'rejects conflicting persisted request identities on restore') {
             const owner = (await state.acquire(randomUUID(), 30000))!
             const key = await journal.define(owner, scope)
@@ -746,14 +890,19 @@ for (const storage of ['sqlite', 'postgres'])
               new AbortController().signal,
             )
             stop = () => controller.close()
-            await expect(controller.restore()).rejects.toBeInstanceOf(StateCorrupt)
+            await expect(ScaleSetController.recover(state, owner)).rejects.toBeInstanceOf(StateCorrupt)
             expect(fixture.requests).toEqual([])
             return
           }
-          if (scenario === 'rotates idle sessions through every page of restored specifications') {
+          if (
+            scenario === 'gives every queued specification a turn beyond the session limit' ||
+            scenario === 'recovers an occupied label past a full page of sleeping registrations'
+          ) {
             const owner = (await state.acquire(randomUUID(), 600))!
             const key = await journal.define(owner, scope)
             const labels = Array.from({ length: 101 }, (_, index) => 'boxlite-1vcpu-1gbmem-' + (index + 1) + 'gbdisk')
+            const recoveryLabel = [...labels].sort().at(-1)!
+            const recovering = scenario === 'recovers an occupied label past a full page of sleeping registrations'
             for (const label of labels) {
               await state.commit(owner, [
                 {
@@ -763,14 +912,26 @@ for (const storage of ['sqlite', 'postgres'])
                     name: 'boxlite-' + randomUUID().replaceAll('-', ''),
                     set: null,
                     assigned: 0,
-                    held: 0,
-                    pending: [],
+                    held: recovering && label === recoveryLabel ? 1 : 0,
+                    pending: recovering && label === recoveryLabel ? [{ id: '123', phase: 'verify' }] : [],
                     message: null,
                     session: null,
                   },
                 },
               ])
             }
+            if (recovering) {
+              expect(await ScaleSetController.recover(state, owner)).toEqual(new Map([[key, [recoveryLabel]]]))
+              stop = start(false)
+              await until(() => fixture.requests.includes('GET /messages'))
+              expect(
+                observe.mock.calls
+                  .filter(([event]) => event.event === 'ci-scale-set-session-opened')
+                  .map(([event]) => event.label),
+              ).toEqual([recoveryLabel])
+              return
+            }
+            for (const [index, label] of labels.entries()) await seedNotice(1000 + index, label)
             for (let i = 0; i < 64; i++) fixture.idle()
             stop = start()
             const opened = () =>
@@ -822,13 +983,13 @@ for (const storage of ['sqlite', 'postgres'])
             const former = (await state.acquire(randomUUID(), 600))!,
               scans = state.scans()
             await scans.synchronize(former, 'personal-token', scope.binding, [scope])
-            const claim = (await scans.claim('label-scanner'))!
-            await scans.publish(
-              claim,
-              [{ repository: 21, job: 55, run: 33, status: 'queued', labels: fixture.labels, runner: null }],
-              ['boxlite'],
-            )
-            await scans.finish(claim, { success: true, intervalMs: 60_000 })
+            jest.mocked(host.scan).mockImplementation(async (claim) => ({
+              queued: async () => [
+                { repository: 21, job: 55, run: 33, status: 'queued', labels: fixture.labels, runner: null },
+              ],
+              publish: (jobs) => scans.publish(claim, jobs, ['boxlite']),
+              close: async () => {},
+            }))
           }
           if (scenario === 'retries an offline assignment after a statless cancellation releases the other candidate') {
             let reject!: () => void
@@ -1005,29 +1166,14 @@ for (const storage of ['sqlite', 'postgres'])
           }
           stop = start()
           if (fixture.discoverCustom && !scanOnly) {
-            await until(() => fixture.requests.includes('GET /messages/default'))
+            expect(fixture.defaultSet).toBeUndefined()
             expect(fixture.definition).toBeUndefined()
-            const secret = Buffer.alloc(32, 1),
-              raw = Buffer.from(
-                JSON.stringify({
-                  action: 'queued',
-                  installation: { id: 1 },
-                  repository: { id: 21, owner: { id: 7 } },
-                  workflow_job: { id: 51, run_id: 31, status: 'queued', labels: fixture.labels },
-                }),
-              )
-            const webhook = verifyWebhook(
-              {
-                raw,
-                event: 'workflow_job',
-                delivery: randomUUID(),
-                signature: 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex'),
-              },
-              secret,
-            )!
+            const webhook = signedJob(51, 'queued', fixture.labels)
             expect(await listener!.receive(webhook)).toBe('stored')
           }
           await until(() => fixture.sessions.length > 0)
+          if (fixture.discoverCustom) expect(fixture.defaultSet).toBeUndefined()
+          if (scanOnly) expect(host.scan).toHaveBeenCalledTimes(1)
           if (scenario === 'traces a failed poll with its scale set and HTTP status') {
             await until(() => fixture.sessions.length === 2)
             expect(report).toHaveBeenCalledWith(
@@ -1817,7 +1963,7 @@ it('reserves one shared global slot for concurrent offers to two tenants', async
         lifetime.signal,
       )
       controllers.push(controller)
-      await controller.restore()
+      controller.restoreLabel('boxlite')
     }
     await until(() => fixtures.every((f) => f.requests.includes('GET /messages')))
     for (const fixture of fixtures) fixture.publish(0, 0, [123])

@@ -227,6 +227,8 @@ describe('CI shared Listener orchestration', () => {
       organization: 'other-tenant',
       installation: { ...scope.installation, id: 2 },
     }
+    await listener.receive(notification(55, 2))
+    await listener.receive(notification(56))
     jest.mocked(host.discover).mockResolvedValue({ scopes: [first, scope], completed: [], pending: false, ready: true })
     jest.mocked(host.backend).mockImplementation(async (current) => {
       if (current.binding === first.binding) throw new Error('Scope credentials unavailable')
@@ -300,6 +302,7 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.workers.create).not.toHaveBeenCalled()
   })
   it('closes the active scale set backend when discovery removes an idle scope', async () => {
+    await listener.receive(notification())
     const closed = deferred()
     jest.mocked(host.discover).mockImplementation(async () => ({
       scopes: jest.mocked(host.backend).mock.calls.length ? [] : [scope],
@@ -447,6 +450,29 @@ describe('CI shared Listener orchestration', () => {
       release.resolve()
       abort.abort()
       await running.catch(() => {})
+    }
+  })
+  it('keeps multiple idle repository scopes cold across scheduler cycles', async () => {
+    const other = structuredClone(scope)
+    if (other.runners.kind !== 'repository') throw new Error('Expected repository scope')
+    other.runners.repository.id = 22
+    other.runners.repository.name = 'another-repo'
+    jest.mocked(host.discover).mockResolvedValue({ scopes: [scope, other], completed: [], pending: false, ready: true })
+    const cycles = deferred()
+    const recover = state.recover.bind(state)
+    let count = 0
+    jest.spyOn(state, 'recover').mockImplementation(async (...args) => {
+      const result = await recover(...args)
+      if (args[2]?.includes('notice/') && ++count === 4) cycles.resolve()
+      return result
+    })
+    const capacity = jest.spyOn(ExecutionJournal.prototype, 'remainingCapacity')
+    try {
+      await runUntil(cycles.promise)
+      expect(host.backend).not.toHaveBeenCalled()
+      expect(capacity).not.toHaveBeenCalled()
+    } finally {
+      capacity.mockRestore()
     }
   })
   it('does not scan idle repositories or refresh the directory on every scheduler tick', async () => {

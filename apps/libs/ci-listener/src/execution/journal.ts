@@ -93,16 +93,25 @@ export class ExecutionJournal {
 
   async check(lease?: ExecutionLease): Promise<void> {
     const [row] = await this.state.read(['journal/format'], lease)
+    this.validateFormat(row)
+  }
+
+  private validateFormat(row?: StateRecord): void {
     if (!row || !object(row.payload) || row.payload.version !== 2) throw new StateCorrupt()
   }
 
   async scope(lease: ExecutionLease, key: string): Promise<ScopeRow> {
     lease = { ...lease }
+    const row = await this.readScopeMetadata(lease, key)
+    await this.usage(Object.values(domains(row.scope)), lease)
+    return row
+  }
+
+  private async readScopeMetadata(lease: ExecutionLease, key: string): Promise<ScopeRow> {
     const id = scopeId(key)
-    await this.check(lease)
-    const records = new Map(
-      (await this.state.read([key, 'scope-state/' + id, 'active-scope/' + id], lease)).map((row) => [row.key, row]),
-    )
+    const keys = ['journal/format', key, 'scope-state/' + id, 'active-scope/' + id, 'app-scope/' + id]
+    const records = new Map((await this.state.read(keys, lease)).map((row) => [row.key, row]))
+    this.validateFormat(records.get('journal/format'))
     const record = records.get(key)
     if (!record || !object(record.payload)) throw new StateCorrupt()
     const scope = decodeScope(record.payload.scope)
@@ -114,10 +123,9 @@ export class ExecutionJournal {
     const application = record.payload.application
     if (application !== null) {
       if (typeof application !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(application)) throw new StateCorrupt()
-      const [mapping] = await this.state.read(['app-scope/' + id], lease)
+      const mapping = records.get('app-scope/' + id)
       if (!mapping || !object(mapping.payload) || mapping.payload.application !== application) throw new StateCorrupt()
     }
-    await this.usage(Object.values(domains(scope)), lease)
     return { record, scope, activity: activity!, index, active }
   }
 
@@ -250,7 +258,7 @@ export class ExecutionJournal {
   }
   private async capacityMargin(lease: ExecutionLease, scope: string, policy: CapacityPolicy): Promise<number> {
     lease = { ...lease }
-    const ids = domains((await this.scope(lease, scope)).scope)
+    const ids = domains((await this.readScopeMetadata(lease, scope)).scope)
     const usage = await this.usage(Object.values(ids), lease)
     let free = 2_147_483_647
     for (const { maximum, domain } of policy.limits) {

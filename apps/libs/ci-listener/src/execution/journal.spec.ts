@@ -243,6 +243,21 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(removed).toBe(true)
       observed.mockRestore()
     })
+    it('reads scope metadata in one fenced batch when computing capacity', async () => {
+      const reads = jest.spyOn(state, 'read')
+      expect(await journal.remainingCapacity(lease, key, limits)).toBe(1)
+      const metadata = reads.mock.calls.filter(([keys]) => !keys.some((item) => item.startsWith('usage/')))
+      expect(metadata).toHaveLength(1)
+      expect(metadata[0][0]).toEqual(expect.arrayContaining(['journal/format', key, 'app-scope/' + key.slice(6)]))
+      expect(metadata[0][1]).toEqual(lease)
+    })
+    it.each(['remainingCapacity', 'permitsChargedRetry'] as const)('%s reads usage in one batch', async (probe) => {
+      const reads = jest.spyOn(state, 'read')
+      const result = await journal[probe](lease, key, limits)
+      expect(result).toBe(probe === 'remainingCapacity' ? 1 : true)
+      const usageBatches = reads.mock.calls.filter(([keys]) => keys.some((key) => key.startsWith('usage/')))
+      expect(usageBatches).toHaveLength(1)
+    })
     it('keeps unlimited domains out of the minimum when a finite domain is full', async () => {
       const policy = {
         limits: [
@@ -254,6 +269,11 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       await journal.reserve(lease, key, null, policy, { labels: ['boxlite'], scaleSet: 9 })
       expect(await journal.remainingCapacity(lease, key, policy)).toBe(0)
       expect(await journal.permitsChargedRetry(lease, key, policy)).toBe(true)
+      await journal.reserve(lease, key, null, testCapacity({ tenant: 2, account: null }), {
+        labels: ['boxlite'],
+        scaleSet: 9,
+      })
+      expect(await journal.permitsChargedRetry(lease, key, policy)).toBe(false)
     })
     it.each([
       [null, undefined],
@@ -506,6 +526,8 @@ for (const backend of ['sqlite', 'postgres'] as const) {
     it.each(['domain/global', 'usage/global'])('does not recreate a missing established %s', async (missing) => {
       const [row] = await state.read([missing])
       await state.commit(lease, [{ key: row.key, expected: row.version }])
+      await expect(journal.scope(lease, key)).rejects.toBeInstanceOf(StateCorrupt)
+      await expect(journal.remainingCapacity(lease, key, limits)).rejects.toBeInstanceOf(StateCorrupt)
       await expect(journal.define(lease, definition)).rejects.toBeInstanceOf(StateCorrupt)
       await expect(journal.define(lease, { ...definition, generation: 2 })).rejects.toBeInstanceOf(StateCorrupt)
       await expect(journal.reserve(lease, key, demand, limits)).rejects.toBeInstanceOf(StateCorrupt)

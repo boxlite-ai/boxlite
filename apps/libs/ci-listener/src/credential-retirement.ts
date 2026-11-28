@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { ExecutionLease, ListenerState, StateChange } from './state/store'
+import { ExecutionLease, ListenerState } from './state/store'
 import { StateCorrupt, StateRecord } from './state/database'
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -16,14 +16,15 @@ export class CredentialCollector {
   async step(original: ExecutionLease): Promise<void> {
     const lease = { ...original }
     const rows = await this.state.scan(lease, { prefix: 'credential/', after: this.after, limit: 16 })
-    const now = await this.state.now(lease)
-    const changes: StateChange[] = []
-    for (const row of rows) {
-      // Scan credentials have independent claims, due indices and collection.
-      if (row.key.startsWith('credential/scan/')) continue
-      if (this.expired(row, lease, now)) changes.push({ key: row.key, expected: row.version })
+    // Scan credentials use their own claim and expiration index.
+    const candidates = rows.filter((row) => !row.key.startsWith('credential/scan/'))
+    if (candidates.length) {
+      const now = await this.state.now(lease)
+      const changes = candidates
+        .filter((row) => this.expired(row, lease, now))
+        .map(({ key, version }) => ({ key, expected: version }))
+      if (changes.length) await this.state.commit(lease, changes)
     }
-    if (changes.length) await this.state.commit(lease, changes)
     this.after = rows.length === 16 ? rows[rows.length - 1].key : ''
   }
 

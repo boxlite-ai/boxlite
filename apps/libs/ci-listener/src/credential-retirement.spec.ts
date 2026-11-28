@@ -158,6 +158,11 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await future.superseded()).toBe(false)
       expect(await roots()).toEqual(activated)
     })
+    it('skips the separate clock read on an empty credential page', async () => {
+      const now = jest.spyOn(state, 'now')
+      await new CredentialCollector(state).step(lease)
+      expect(now).not.toHaveBeenCalled()
+    })
     it('uses database time and collects at the exact expiry boundary after takeover', async () => {
       const row = await issue()
       await takeover()

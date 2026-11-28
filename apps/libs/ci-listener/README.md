@@ -403,11 +403,37 @@ points use this kernel; runtime acceptance remains a separate deployment check.
 
 ## GitHub runner scale sets
 
-Hosted CI and the standalone Listener Box use the same TypeScript Scale Set client for every installation. The elected listener opens one cancellable session per binding, execution scope and worker specification. Each session sends its available capacity to GitHub and explicitly acquires eligible job requests.
+Hosted CI and the standalone Listener Box use the same TypeScript Scale Set client for every installation. The elected listener opens a cancellable session for a scope and worker specification when a queued job or recoverable work needs it. Each session sends its available capacity to GitHub and explicitly acquires eligible job requests.
 
-An authenticated queued-job observation can seed an additional supported resource label, with up to 64 open sessions per scope. When more specifications are waiting, an empty poll on an idle set gives another specification a turn. An active set keeps its session.
+Before a poll or charged retry, one lease-fenced read validates the journal format, scope, activity index and original App mapping. A second read validates the global, organization and account counters.
 
-A failed session releases its lane during backoff. Other specifications can start while the failed one waits for its retry deadline.
+The journal computes the margin from that batch, including validation of domains with
+no configured limit. A new reservation checks current counter versions when it commits.
+
+A signed queued webhook or an authorized repository scan wakes its matching label. Its notice stays durable until a poll that saw that version advertises spare capacity and returns empty or acquires an offer. A newer notice arriving during a poll or session close gets its own poll.
+
+```mermaid
+sequenceDiagram
+    participant Inbox as Durable job notices
+    participant L as Listener
+    participant G as GitHub Actions
+    Inbox->>L: Queued notice A
+    L->>G: Poll for A
+    G-->>L: Empty response
+    L->>Inbox: Settle exactly version A
+    L->>G: Close idle session
+    Inbox->>L: Queued notice B during close
+    G-->>L: Session closed
+    L->>G: Open and poll for B
+```
+
+Each scope admits up to 64 concurrent sessions in waiting order. After a poll reconciles outstanding work, the session advertises its updated capacity. An empty poll on an idle set can then close the session when no acquisition or worker, including a worker awaiting cleanup, remains.
+
+Takeover restores saved assignments and acquisitions and the labels of outstanding workers.
+
+An idle repository incurs no per-label capacity reads or Actions polls. Lease renewal, inbox discovery and bounded repository scans continue; a missed webhook can delay the first job until compensation finds it.
+
+A failed session releases its lane during backoff. At the retry deadline only outstanding notices or recovery work reopen it. A cancellation during backoff leaves a cold label asleep.
 
 A workflow can request a new specification directly:
 
@@ -415,7 +441,7 @@ A workflow can request a new specification directly:
 runs-on: boxlite-1vcpu-1gbmem-10gbdisk
 ```
 
-Each binding starts with `boxlite`. A signed queued webhook opens a set for this label in the authorized runner group.
+A workflow using `runs-on: boxlite` wakes the default label. The example above wakes only its resource label in the authorized runner group.
 
 A standalone PAT listener can also discover the specification through its authorized repository scan. Once GitHub assigns the work, the Box requests 1 vCPU, 1,024 MiB of memory and 10 GiB of disk.
 
