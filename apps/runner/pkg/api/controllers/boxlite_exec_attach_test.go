@@ -4,13 +4,16 @@
 package controllers
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,8 +21,11 @@ import (
 	"time"
 
 	"github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/common"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // stubAttachExec is a substitutable attachExec for unit-testing the
@@ -38,6 +44,12 @@ type stubAttachExec struct {
 	connected  atomic.Bool
 	disconnect atomic.Int32
 
+	// Slot bookkeeping the production ManagedExec keeps: when the current
+	// occupant claimed the slot and how many sessions there have been.
+	stateMu     sync.Mutex
+	connectedAt time.Time
+	sessions    int
+
 	mu             sync.Mutex
 	resizeRows     int
 	resizeCols     int
@@ -50,6 +62,10 @@ type stubAttachExec struct {
 	// allowSecondAttach: when false, MarkConnected returns false on second call.
 	allowSecondAttach bool
 
+	// panicOnExitCode makes ExitCodeValue panic, to exercise the attach
+	// loop's recover path.
+	panicOnExitCode bool
+
 	// Subscriber fan-out: mirrors the production broadcaster so tests
 	// exercise the same channel-based path the real /attach handler uses.
 	subMu        sync.Mutex
@@ -58,9 +74,20 @@ type stubAttachExec struct {
 }
 
 type stubSubscriber struct {
-	stdout chan []byte
-	stderr chan []byte
+	stdout *stubStream
+	stderr *stubStream
 }
+
+// stubStream is the test-side attachStream: the fan-out channel plus the
+// drop counter. The stub never replays a backlog.
+type stubStream struct {
+	ch      chan []byte
+	dropped atomic.Uint64
+}
+
+func (s *stubStream) Chan() <-chan []byte { return s.ch }
+func (s *stubStream) Dropped() uint64     { return s.dropped.Load() }
+func (s *stubStream) Replayed() uint64    { return 0 }
 
 func newStubAttachExec() *stubAttachExec {
 	stdoutR, stdoutW := io.Pipe()
@@ -79,12 +106,12 @@ func newStubAttachExec() *stubAttachExec {
 // production fan-out broadcaster); each subscriber gets its own channels and
 // sees all subsequent bytes. The pump goroutines exit when the stdout/stderr
 // pipes EOF or when the subscriber is cancelled.
-func (s *stubAttachExec) Subscribe(bufSize int) (stdout, stderr <-chan []byte, cancel func()) {
+func (s *stubAttachExec) Subscribe(bufSize int) (stdout, stderr attachStream, cancel func()) {
 	if bufSize <= 0 {
 		bufSize = 256
 	}
-	outCh := make(chan []byte, bufSize)
-	errCh := make(chan []byte, bufSize)
+	outCh := &stubStream{ch: make(chan []byte, bufSize)}
+	errCh := &stubStream{ch: make(chan []byte, bufSize)}
 
 	s.subMu.Lock()
 	s.subs = append(s.subs, stubSubscriber{stdout: outCh, stderr: errCh})
@@ -106,8 +133,8 @@ func (s *stubAttachExec) Subscribe(bufSize int) (stdout, stderr <-chan []byte, c
 				}
 			}
 			s.subMu.Unlock()
-			close(outCh)
-			close(errCh)
+			close(outCh.ch)
+			close(errCh.ch)
 		})
 	}
 	return outCh, errCh, cancel
@@ -125,13 +152,14 @@ func (s *stubAttachExec) broadcastPipe(r *io.PipeReader, isStdout bool) {
 			copy(chunk, buf[:n])
 			s.subMu.Lock()
 			for _, sub := range s.subs {
-				ch := sub.stdout
+				st := sub.stdout
 				if !isStdout {
-					ch = sub.stderr
+					st = sub.stderr
 				}
 				select {
-				case ch <- chunk:
+				case st.ch <- chunk:
 				default:
+					st.dropped.Add(uint64(n))
 				}
 			}
 			s.subMu.Unlock()
@@ -154,8 +182,13 @@ func (s *stubAttachExec) WriteStdin(data []byte) (int, error) {
 	return s.stdinW.Write(data)
 }
 func (s *stubAttachExec) DoneCh() <-chan struct{} { return s.done }
-func (s *stubAttachExec) ExitCodeValue() int      { return s.exitCode }
-func (s *stubAttachExec) IsTTY() bool             { return s.tty }
+func (s *stubAttachExec) ExitCodeValue() int {
+	if s.panicOnExitCode {
+		panic("exit code stub panic")
+	}
+	return s.exitCode
+}
+func (s *stubAttachExec) IsTTY() bool { return s.tty }
 func (s *stubAttachExec) Resize(rows, cols int) error {
 	s.mu.Lock()
 	s.resizeRows = rows
@@ -178,9 +211,23 @@ func (s *stubAttachExec) CloseStdin() error {
 
 func (s *stubAttachExec) MarkConnected() bool {
 	if s.connected.CompareAndSwap(false, true) {
+		s.stateMu.Lock()
+		s.connectedAt = time.Now()
+		s.sessions++
+		s.stateMu.Unlock()
 		return true
 	}
 	return s.allowSecondAttach
+}
+
+func (s *stubAttachExec) AttachState() boxlite.AttachState {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return boxlite.AttachState{
+		Connected:   s.connected.Load(),
+		ConnectedAt: s.connectedAt,
+		Sessions:    s.sessions,
+	}
 }
 
 func (s *stubAttachExec) MarkDisconnected() {
@@ -1030,5 +1077,456 @@ func TestBoxliteExecAttach_PongingPeerStillHitsTheBound(t *testing.T) {
 	}
 	if waited := time.Since(started); waited > 2*time.Second {
 		t.Fatalf("a ponging peer held the connection for %s, past the bound", waited)
+	}
+}
+
+// ─── attach session logging ──────────────────────────────────────────────
+//
+// The runner used to leave no trace of an attach session: a 409 and a silent
+// disconnect were both invisible, and the only evidence of a reconnect hang
+// was one SDK WARN line. These tests pin the session-end and refusal lines:
+// the reason must classify correctly, the first failure must survive the
+// later ones, and nothing from the request or the streams may leak into the
+// log.
+
+// syncBuffer is a bytes.Buffer that a slog handler on the server goroutine
+// may write to while the test goroutine polls its contents.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// captureAttachLogs points the default slog logger at a buffer for the
+// duration of the test, at DEBUG so the normal-end lines show up too. Safe
+// because no test in this package calls t.Parallel.
+func captureAttachLogs(t *testing.T) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
+// logLine waits for the one line holding every substring and returns it.
+// A session's end is logged from the server goroutine, so a line from an
+// earlier test's server can land in a later test's buffer; naming the exec
+// id as well as the message keeps the match on this test's line.
+func logLine(t *testing.T, logs *syncBuffer, substrs ...string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, l := range strings.Split(logs.String(), "\n") {
+			if containsAll(l, substrs) {
+				return l
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("log line with %q never appeared; captured:\n%s", substrs, logs.String())
+	return ""
+}
+
+func containsAll(line string, substrs []string) bool {
+	for _, s := range substrs {
+		if !strings.Contains(line, s) {
+			return false
+		}
+	}
+	return true
+}
+
+// assertLogHas waits for the line holding every substring of `match` and
+// checks that it carries every wanted field and none of the forbidden
+// substrings, naming what is wrong in the failure.
+func assertLogHas(t *testing.T, logs *syncBuffer, match []string, want []string, forbid ...string) {
+	t.Helper()
+	line := logLine(t, logs, match...)
+	for _, w := range want {
+		if !strings.Contains(line, w) {
+			t.Errorf("log line lacks %q; got:\n%s", w, line)
+		}
+	}
+	for _, f := range forbid {
+		if strings.Contains(line, f) {
+			t.Errorf("log line leaks %q; got:\n%s", f, line)
+		}
+	}
+}
+
+// counterValue reads a Prometheus counter without the testutil package, so
+// the test adds no module requirement.
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	return m.GetCounter().GetValue()
+}
+
+func TestClassifyAttachEnd(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want attachEndReason
+	}{
+		{"nothing reported", nil, attachEndServerShutdown},
+		{"client close frame",
+			fmt.Errorf("read client frame: %w", &websocket.CloseError{Code: websocket.CloseNormalClosure, Text: "bye"}),
+			attachEndClientClose},
+		{"close frame without a status code",
+			fmt.Errorf("read client frame: %w", &websocket.CloseError{Code: websocket.CloseNoStatusReceived}),
+			attachEndClientClose},
+		{"socket dropped without a close frame (gorilla's 1006)",
+			fmt.Errorf("read client frame: %w", &websocket.CloseError{Code: websocket.CloseAbnormalClosure, Text: "unexpected EOF"}),
+			attachEndReadError},
+		{"output write failure",
+			attachWriteError{fmt.Errorf("write stdout frame: %w", errors.New("broken pipe"))},
+			attachEndWriteFailed},
+		{"read deadline as net error",
+			fmt.Errorf("read client frame: %w", &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}),
+			attachEndPongTimeout},
+		{"read deadline sentinel",
+			fmt.Errorf("read client frame: %w", os.ErrDeadlineExceeded),
+			attachEndPongTimeout},
+		{"socket reset",
+			fmt.Errorf("read client frame: %w", errors.New("connection reset by peer")),
+			attachEndReadError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyAttachEnd(tc.err); got != tc.want {
+				t.Fatalf("classifyAttachEnd(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// The first failure names the cause; the ones that follow are consequences
+// of the teardown it started.
+func TestAttachEndRecordKeepsFirstError(t *testing.T) {
+	var r attachEndRecord
+	if r.get() != nil {
+		t.Fatalf("empty record holds %v", r.get())
+	}
+	first := errors.New("first")
+	r.fail(first)
+	r.fail(errors.New("second"))
+	r.fail(nil)
+	if r.get() != first {
+		t.Fatalf("record kept %v, want the first error %v", r.get(), first)
+	}
+}
+
+func TestBoxliteExecAttach_RefusalIsLoggedWithoutRequestDetails(t *testing.T) {
+	logs := captureAttachLogs(t)
+	before := counterValue(t, common.ExecAttachRefusals.WithLabelValues("slot_occupied"))
+
+	stub := newStubAttachExec()
+	cleanup := withStubExec(t, "exec-busy", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn1, resp1, err := dialAttach(t, srv, "exec-busy")
+	if err != nil {
+		t.Fatalf("first dial failed: %v (resp=%v)", err, resp1)
+	}
+	defer conn1.Close()
+
+	// Credentials ride in the query string on some deployments, so it is the
+	// part of the URL that must never reach a log.
+	conn2, resp2, err := dialAttachQuery(t, srv, "exec-busy", "?token=secret-query-value")
+	if err == nil {
+		conn2.Close()
+		t.Fatal("expected second dial to fail with 409")
+	}
+	if resp2 == nil || resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("expected status 409, got resp=%v err=%v", resp2, err)
+	}
+
+	assertLogHas(t, logs, []string{"exec attach refused", `"execId":"exec-busy"`}, []string{
+		`"level":"WARN"`, `"boxId":"box"`, `"execId":"exec-busy"`,
+		`"reason":"slot_occupied"`, `"execDone":false`, `"occupantConnectedForMs":`,
+	}, "secret-query-value")
+	if counterValue(t, common.ExecAttachRefusals.WithLabelValues("slot_occupied"))-before < 1 {
+		t.Error("refusal counter did not move")
+	}
+}
+
+// dialAttachQuery is dialAttach with a query string appended to the path.
+func dialAttachQuery(t *testing.T, srv *httptest.Server, execId, query string) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	wsURL := strings.Replace(srv.URL, "http://", "ws://", 1) +
+		"/v1/boxes/box/executions/" + execId + "/attach" + query
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = 5 * time.Second
+	return dialer.Dial(wsURL, nil)
+}
+
+// A session that ends with the exec must report what it sent per stream,
+// and must not repeat the output in the log.
+func TestBoxliteExecAttach_SessionEndLog_ExecDone(t *testing.T) {
+	logs := captureAttachLogs(t)
+	before := counterValue(t, common.ExecAttachSessions.WithLabelValues("exec_done"))
+
+	stub := newStubAttachExec()
+	stub.exitCode = 3
+	cleanup := withStubExec(t, "exec-done", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, _, err := dialAttachQuery(t, srv, "exec-done", "?stdin=1&token=secret-query-value")
+	if err != nil {
+		t.Fatalf("dial attach: %v", err)
+	}
+	defer conn.Close()
+
+	// The reader goroutine starts after Subscribe, so stdin round-tripping
+	// proves the pump is live before output is written into a stub that has
+	// no backlog to replay it from.
+	stdinDone := make(chan []byte, 1)
+	go func() {
+		buf := make([]byte, 8)
+		n, _ := stub.stdinR.Read(buf)
+		stdinDone <- buf[:n]
+	}()
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("go")); err != nil {
+		t.Fatalf("write stdin: %v", err)
+	}
+	select {
+	case <-stdinDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stdin pump did not deliver bytes")
+	}
+	if _, err := stub.stdoutW.Write([]byte("hello-secret-output")); err != nil {
+		t.Fatalf("write stub stdout: %v", err)
+	}
+	mt, payload, err := readNextDataFrame(t, conn, 2*time.Second)
+	if err != nil || mt != websocket.BinaryMessage || string(payload) != "\x01hello-secret-output" {
+		t.Fatalf("expected stdout frame, got mt=%d payload=%q err=%v", mt, payload, err)
+	}
+
+	close(stub.done)
+
+	// Read up to the exit frame, then answer the server's Close so the
+	// handshake completes and the session-end line is written promptly.
+	sawExit := false
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for {
+		mt, payload, err := conn.ReadMessage()
+		if err != nil {
+			if !sawExit {
+				t.Fatalf("connection ended before the exit frame: %v", err)
+			}
+			break
+		}
+		if mt == websocket.TextMessage {
+			var ev struct {
+				Type     string `json:"type"`
+				ExitCode int    `json:"exit_code"`
+			}
+			if err := json.Unmarshal(payload, &ev); err != nil {
+				t.Fatalf("bad exit json: %v", err)
+			}
+			if ev.Type == "exit" {
+				if ev.ExitCode != 3 {
+					t.Fatalf("expected exit_code 3, got %d", ev.ExitCode)
+				}
+				sawExit = true
+				_ = conn.WriteControl(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+					time.Now().Add(2*time.Second))
+			}
+		}
+	}
+
+	assertLogHas(t, logs, []string{"exec attach session ended", `"execId":"exec-done"`}, []string{
+		`"level":"DEBUG"`, `"boxId":"box"`, `"execId":"exec-done"`, `"reason":"exec_done"`,
+		`"execDone":true`, `"exitFrameSent":true`, `"execAttachSessions":1`,
+		`"stdoutReplayedBytes":0`, `"stdoutSentBytes":20`, `"stdoutDroppedBytes":0`,
+		`"stderrReplayedBytes":0`, `"stderrSentBytes":0`, `"stderrDroppedBytes":0`,
+	}, "hello-secret-output", "secret-query-value", "firstError")
+	if counterValue(t, common.ExecAttachSessions.WithLabelValues("exec_done"))-before < 1 {
+		t.Error("exec_done counter did not move")
+	}
+}
+
+// A client Close frame is the normal end of a session that the client ends
+// itself — what the SDK does before it reconnects.
+func TestBoxliteExecAttach_SessionEndLog_ClientClose(t *testing.T) {
+	logs := captureAttachLogs(t)
+	stub := newStubAttachExec()
+	cleanup := withStubExec(t, "exec-close", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, _, err := dialAttach(t, srv, "exec-close")
+	if err != nil {
+		t.Fatalf("dial attach: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "reconnecting"),
+		time.Now().Add(2*time.Second)); err != nil {
+		t.Fatalf("send close: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			break
+		}
+	}
+
+	assertLogHas(t, logs, []string{"exec attach session ended", `"execId":"exec-close"`}, []string{
+		`"level":"DEBUG"`, `"execId":"exec-close"`, `"reason":"client_close"`,
+		`"clientCloseCode":1000`, `"execDone":false`, `"exitFrameSent":false`,
+		`"firstError":"read client frame: websocket: close 1000 (normal): reconnecting"`,
+	})
+}
+
+// A client that keeps the socket but stops answering pings is evicted at
+// pongWait; the line must say so, at WARN.
+func TestBoxliteExecAttach_SessionEndLog_PongTimeout(t *testing.T) {
+	logs := captureAttachLogs(t)
+	restore := setKeepaliveIntervalForTest(50 * time.Millisecond)
+	defer restore()
+
+	stub := newStubAttachExec()
+	cleanup := withStubExec(t, "exec-pong", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, _, err := dialAttach(t, srv, "exec-pong")
+	if err != nil {
+		t.Fatalf("dial attach: %v", err)
+	}
+	defer conn.Close()
+	conn.SetPingHandler(func(string) error { return nil })
+	go func() {
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	assertLogHas(t, logs, []string{"exec attach session ended", `"execId":"exec-pong"`}, []string{
+		`"level":"WARN"`, `"execId":"exec-pong"`, `"reason":"pong_timeout"`,
+		`"firstError":"read client frame: read tcp`, `i/o timeout`,
+	})
+}
+
+// A socket dropped without a Close frame — a killed client process or a cut
+// network — reads as an error on our side and cannot be told apart, so it
+// is WARN too.
+func TestBoxliteExecAttach_SessionEndLog_ReadError(t *testing.T) {
+	logs := captureAttachLogs(t)
+	stub := newStubAttachExec()
+	cleanup := withStubExec(t, "exec-reset", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, _, err := dialAttach(t, srv, "exec-reset")
+	if err != nil {
+		t.Fatalf("dial attach: %v", err)
+	}
+	if err := conn.UnderlyingConn().Close(); err != nil {
+		t.Fatalf("close socket: %v", err)
+	}
+
+	// gorilla surfaces the dropped socket as a 1006 CloseError; the line must
+	// still call it a read error and must not report a client close code.
+	assertLogHas(t, logs, []string{"exec attach session ended", `"execId":"exec-reset"`}, []string{
+		`"level":"WARN"`, `"execId":"exec-reset"`, `"reason":"read_error"`,
+		`"firstError":"read client frame: websocket: close 1006 (abnormal closure): unexpected EOF"`,
+	}, `"clientCloseCode"`, `"reason":"client_close"`)
+}
+
+// A panic in the loop is ERROR, and the slot is still released.
+func TestBoxliteExecAttach_SessionEndLog_Panic(t *testing.T) {
+	logs := captureAttachLogs(t)
+	// The test client never answers the server's Close, so bound the wait.
+	restore := setPeerCloseWaitForTest(200 * time.Millisecond)
+	defer restore()
+
+	stub := newStubAttachExec()
+	stub.panicOnExitCode = true
+	cleanup := withStubExec(t, "exec-panic", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, _, err := dialAttach(t, srv, "exec-panic")
+	if err != nil {
+		t.Fatalf("dial attach: %v", err)
+	}
+	defer conn.Close()
+	close(stub.done)
+
+	assertLogHas(t, logs, []string{"exec attach session ended", `"execId":"exec-panic"`}, []string{
+		`"level":"ERROR"`, `"execId":"exec-panic"`, `"reason":"panic"`,
+		`"firstError":"attach loop panic: exit code stub panic"`,
+	})
+	if stub.connected.Load() {
+		t.Error("attach slot still held after the panic")
+	}
+}
+
+// A request that is not a WebSocket upgrade fails after the slot was
+// claimed; it is logged as upgrade_failed and the slot is released.
+func TestBoxliteExecAttach_SessionEndLog_UpgradeFailed(t *testing.T) {
+	logs := captureAttachLogs(t)
+	before := counterValue(t, common.ExecAttachSessions.WithLabelValues("upgrade_failed"))
+
+	stub := newStubAttachExec()
+	cleanup := withStubExec(t, "exec-up", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v1/boxes/box/executions/exec-up/attach?token=secret-query-value")
+	if err != nil {
+		t.Fatalf("plain GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 from the upgrader, got %d", resp.StatusCode)
+	}
+
+	assertLogHas(t, logs, []string{"exec attach upgrade failed", `"execId":"exec-up"`}, []string{
+		`"level":"WARN"`, `"boxId":"box"`, `"execId":"exec-up"`, `"reason":"upgrade_failed"`, `"error":`,
+	}, "secret-query-value")
+	if stub.connected.Load() {
+		t.Error("attach slot still held after the failed upgrade")
+	}
+	if counterValue(t, common.ExecAttachSessions.WithLabelValues("upgrade_failed"))-before < 1 {
+		t.Error("upgrade_failed counter did not move")
 	}
 }

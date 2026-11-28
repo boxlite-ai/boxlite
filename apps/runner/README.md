@@ -308,15 +308,16 @@ pkg/api/controllers/boxlite_exec.go
 pkg/api/controllers/boxlite_exec_attach.go
 └─ BoxliteExecAttach(ctx)                     GET /attach   (WebSocket upgrade)
    ├─ ManagedExec.MarkConnected()             409 if slot already taken
-   └─ runAttachLoop(parentCtx, conn, exec)    4 goroutines, fail-fast cancel
+   └─ runAttachLoop(parentCtx, conn, exec, boxId, execId)  4 goroutines, fail-fast cancel
       ├─ conn.SetReadDeadline(now + 45s)      45s = 3 × Ping interval; trips ReadMessage on dead peer
       ├─ conn.SetPongHandler(reset deadline)  each Pong pushes it out — until the loop is cancelled
-      ├─ pumpSubscriberChannel() × {1,2}      stdout 0x01 / stderr 0x02 frames (subscribed to ManagedExec broadcaster)
+      ├─ attachOutput.pump() × {1,2}          stdout 0x01 / stderr 0x02 frames (subscribed to ManagedExec broadcaster)
       ├─ readClientFrames()                   binary → stdin; text JSON → control; drains past cancel
       │  └─ handleControlFrame()              resize | signal (whitelist) | stdin_eof
       ├─ runKeepalive()                       WS Ping every 15s
       ├─ (on exec.Done) writeJSONFrame()      sends {"type":"exit",...} + Close
-      └─ awaitPeerClose(conn, readerDone)     RFC 6455 §5.5.1: hold TCP for the peer's Close, ≤ 5 s
+      ├─ awaitPeerClose(conn, readerDone)     RFC 6455 §5.5.1: hold TCP for the peer's Close, ≤ 5 s
+      └─ logAttachSessionEnd()                one line per session + exec_attach_sessions_total
 
 pkg/boxlite/exec_manager.go
 ├─ ExecManager (struct)                       map[id]*ManagedExec + cleanupLoop
@@ -435,10 +436,53 @@ Notable properties:
   intermediary still relaying the `101`, which an external load balancer
   reports as a failed upgrade rather than as the clean exit it was.
 - **Single-attach.** A second `/attach` to an already-attached exec
-  returns HTTP 409 _before_ the WS upgrade. The client should respect
-  this and surface a "session busy" error rather than retry. The slot is
-  held until the close handshake above finishes, so it can outlive the
-  exit frame by up to that bound.
+  returns HTTP 409 _before_ the WS upgrade. The slot is held until the
+  close handshake above finishes, so it can outlive the exit frame by up
+  to that bound, and a client that gives a connection up on its own has
+  to close it — Close frame, then the socket — before it reconnects, or
+  its first reconnect lands on a slot the old session still holds. The
+  server only notices a silent client when its Pings go unanswered for
+  45 s; a client that reads but never answers is told apart from a dead
+  one by the `pong_timeout` reason below. The SDK does both (it Pings on
+  connect and closes before reconnecting); a client that gets a 409
+  should surface it as "session busy" rather than retry in a tight loop.
+
+#### Attach session logs and metrics
+
+Every attach session leaves exactly one log line when it ends, and every
+refused attach one more. They are what lets two sides of a disconnect be
+matched: the SDK logs its side of the same event (see the Rust SDK's
+`attach_ws_pump`), and the timestamps and reasons line up. Only byte
+counts are logged — never headers, the request URL, stdin or output.
+
+| Line | Level | When |
+| --- | --- | --- |
+| `boxlite exec attach session ended` | DEBUG for `exec_done` and `client_close`, WARN otherwise, ERROR for `panic` | Every session, once |
+| `boxlite exec attach refused` | WARN | Every 409 |
+| `boxlite exec attach upgrade failed` | WARN | Upgrade rejected after the slot was claimed |
+
+The session-end line carries `boxId`, `execId`, `reason`, the first
+error's text, the client's Close status code when there was one, how long
+the socket was up, per-stream replayed / sent / dropped bytes, whether the
+exit frame was sent, whether the exec had finished, and how many sessions
+the exec has had. `reason` is one of:
+
+| Reason | Meaning |
+| --- | --- |
+| `exec_done` | The exec finished; the exit frame was sent (or its drain timed out). |
+| `client_close` | The client sent a WebSocket Close frame. |
+| `pong_timeout` | No frame from the client for 45 s (3 × keepalive). On a still-running exec this means the client stopped reading. |
+| `read_error` | Any other read failure: a dropped socket, a reset, a killed client process. These cannot be told apart from a network cut. |
+| `write_failed` | An output frame or a keepalive Ping could not be written. |
+| `upgrade_failed` | The WebSocket upgrade itself failed. |
+| `panic` | A goroutine of the attach loop panicked. The slot is still released. |
+| `server_shutdown` | The server shut the connection down with no error reported and the exec still running. |
+
+Two counters expose the same on `/metrics`: `exec_attach_sessions_total{reason}`
+and `exec_attach_refusals_total{reason}` (`slot_occupied` or `reaping`). A
+healthy runner only adds to `exec_done` and `client_close`; a steady
+`pong_timeout` rate on its own is a client that stopped reading, not a
+network problem.
 
 #### Reaping policy
 

@@ -147,12 +147,17 @@ type ManagedExec struct {
 	// handler (Phase 3.1) sets Connected/LastDisconnectAt; the Phase 4
 	// reaper reads them and toggles SignaledHUP/SignaledTERM as it
 	// escalates an orphaned session.
+	// ConnectedAt and AttachSessions feed the /attach session-end log: how
+	// long the current client has held the slot, and how many sessions
+	// (connects, including reconnects) this exec has had.
 	// doneAt is stamped the first time the reaper observes Done. Used for
 	// retention so long-running execs are not evicted immediately on exit.
 	doneAt time.Time
 
 	attachMu         sync.Mutex
 	Connected        bool
+	ConnectedAt      time.Time
+	AttachSessions   int
 	LastDisconnectAt time.Time
 	SignaledHUP      bool
 	SignaledTERM     bool
@@ -201,6 +206,9 @@ func newStreamBus(cap int) *streamBus {
 type streamSub struct {
 	ch      chan []byte
 	dropped atomic.Uint64
+	// replayed is the size of the backlog snapshot the subscriber was handed
+	// at Subscribe time: output produced before this subscriber attached.
+	replayed atomic.Uint64
 }
 
 // Chan returns the receive side of the subscriber's channel. It is closed
@@ -209,6 +217,10 @@ func (s *streamSub) Chan() <-chan []byte { return s.ch }
 
 // Dropped returns the cumulative bytes dropped due to subscriber back-pressure.
 func (s *streamSub) Dropped() uint64 { return s.dropped.Load() }
+
+// Replayed returns the bytes of backlog snapshot sent to this subscriber
+// when it subscribed.
+func (s *streamSub) Replayed() uint64 { return s.replayed.Load() }
 
 // Write implements io.Writer. Called by the Go SDK's stdout/stderr pump.
 // Appends `p` to the bounded backlog (drop-oldest when full), then
@@ -262,6 +274,7 @@ func (b *streamBus) Subscribe(chBuf int) (sub *streamSub, cancel func()) {
 		// chBuf is fresh and empty here, so this send is guaranteed
 		// non-blocking and cannot drop the replay snapshot.
 		s.ch <- replay
+		s.replayed.Store(uint64(len(replay)))
 	}
 	if b.closed {
 		// Bus closed before Subscribe — replay-then-EOF, no live add.
@@ -965,10 +978,39 @@ func (e *ManagedExec) MarkConnected() bool {
 		return false
 	}
 	e.Connected = true
+	e.ConnectedAt = time.Now()
+	e.AttachSessions++
 	e.LastDisconnectAt = time.Time{}
 	e.SignaledHUP = false
 	e.SignaledTERM = false
 	return true
+}
+
+// AttachState is a snapshot of the attach-slot bookkeeping for the /attach
+// handler's logs.
+type AttachState struct {
+	// Connected is true while a client holds the single attach slot.
+	Connected bool
+	// ConnectedAt is when the current occupant claimed the slot; zero when
+	// nobody holds it.
+	ConnectedAt time.Time
+	// Sessions counts every successful claim (connects and reconnects).
+	Sessions int
+	// Reaping is true once the reaper has claimed the exec, so no client
+	// may attach again.
+	Reaping bool
+}
+
+// AttachState snapshots the attach-slot bookkeeping under attachMu.
+func (e *ManagedExec) AttachState() AttachState {
+	e.attachMu.Lock()
+	defer e.attachMu.Unlock()
+	return AttachState{
+		Connected:   e.Connected,
+		ConnectedAt: e.ConnectedAt,
+		Sessions:    e.AttachSessions,
+		Reaping:     e.ReapingKill || e.Escalating,
+	}
 }
 
 // FinishEscalation clears the Escalating flag after signal delivery so

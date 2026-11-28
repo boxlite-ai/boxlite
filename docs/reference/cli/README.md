@@ -471,6 +471,26 @@ separator is required (`src/cli/src/commands/exec.rs:22`, `last = true`).
 
 **Exit behavior:** Same as `boxlite run` (foreground streams + propagates exit code; detach exits `0`). After a foreground exec finishes the CLI calls `runtime.shutdown(None)` to release the box handle gracefully.
 
+**Streaming connection** (`run`, `exec` and `attach` against a remote
+runtime): output arrives over one WebSocket per execution. The client pings the
+server as soon as it connects, so a command that prints nothing for as long as
+it runs is not mistaken for a dead connection. When the connection really drops
+— a network cut, a server redeploy, or the one-hour request limit of some
+platforms — the client reconnects after 2 seconds and keeps trying for 270
+seconds; output buffered on the server in the meantime is replayed, which means
+the last stretch before the drop (up to 256 KiB per stream) can appear twice. If
+the command finished while the connection was down, the client reconnects once
+more to fetch its retained output and exit code. The server keeps only the
+newest 256 KiB per stream and discards anything older, so that output can be
+incomplete even when reconnect succeeds. When that fetch fails, the client still
+returns the exit code, but the result carries an error message saying the output
+was not fetched, and the CLI exits non-zero. The client logs to stderr at
+WARN by default: one line per disconnect (with the cause, the heartbeat counts
+and the bytes seen), one per failed reconnect attempt, and one when a fetch
+fails or the budget runs out; `RUST_LOG=info` or `--debug` adds the reconnect
+successes. These lines are what the runner's own `exec attach session ended`
+log is matched against (see `apps/runner/README.md`).
+
 For `exec`, a command the guest refuses to launch is still a completed execution:
 `127` when the executable is not found, `126` when it exists but is not
 executable. Foreground exec propagates that status. The guest's diagnostic goes

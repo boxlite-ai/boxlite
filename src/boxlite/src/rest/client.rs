@@ -196,6 +196,22 @@ impl ApiClient {
     /// (`https://api.example.com/v1/boxes`) — the single-tenant
     /// `boxlite serve` shape. Multi-segment prefixes like
     /// `us-east/team-42` are substituted verbatim.
+    /// The server's `host[:port]`, for logs. Scheme, path, routing prefix
+    /// and any `user:pass@` are dropped, so a credential embedded in the
+    /// base URL cannot reach a log line.
+    pub(crate) fn server_authority(&self) -> &str {
+        let rest = self
+            .base_url
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(&self.base_url);
+        let authority = rest.split('/').next().unwrap_or(rest);
+        authority
+            .rsplit_once('@')
+            .map(|(_, host)| host)
+            .unwrap_or(authority)
+    }
+
     fn url(&self, path: &str) -> String {
         match self.path_prefix.as_deref().filter(|s| !s.is_empty()) {
             Some(p) => format!("{}/v1/{}{}", self.base_url, p, path),
