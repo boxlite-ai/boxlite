@@ -16,6 +16,13 @@ import { BoxState } from '../box/enums/box-state.enum'
 import { BOX_EVENT_CHANNEL } from '../common/constants/constants'
 import { Context } from '../common/context/context'
 
+const originalAsyncWrites = process.env.AUDIT_ASYNC_WRITES_ENABLED
+beforeEach(() => (process.env.AUDIT_ASYNC_WRITES_ENABLED = 'false'))
+afterEach(() => {
+  if (originalAsyncWrites === undefined) delete process.env.AUDIT_ASYNC_WRITES_ENABLED
+  else process.env.AUDIT_ASYNC_WRITES_ENABLED = originalAsyncWrites
+})
+
 const user = {
   userId: 'user',
   email: 'user@example.test',

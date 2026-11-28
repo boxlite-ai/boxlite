@@ -48,7 +48,7 @@ async function histogramPoints(name: string): Promise<any[]> {
 }
 
 function proxyRequest() {
-  return Object.assign(new EventEmitter(), { setHeader: jest.fn(), destroy: jest.fn() })
+  return Object.assign(new EventEmitter(), { setHeader: jest.fn(), destroy: jest.fn(), reusedSocket: false })
 }
 
 function socket() {
@@ -67,6 +67,7 @@ describe('runner proxy telemetry', () => {
     spanExporter.reset()
     jest.clearAllMocks()
   })
+  afterEach(() => jest.useRealTimers())
   afterAll(async () => {
     await meterProvider.shutdown()
     await tracerProvider.shutdown()
@@ -91,9 +92,10 @@ describe('runner proxy telemetry', () => {
         }),
         updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
       } as any,
-      { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }) } as any,
+      { findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }) } as any,
       { ensureReady: jest.fn() } as any,
       {} as any,
+      { forTarget: () => ({}) } as any,
     )
     const req = {
       method: 'POST',
@@ -127,6 +129,8 @@ describe('runner proxy telemetry', () => {
     const { options, req, res } = await httpHarness()
     const upstreamReq = proxyRequest()
     options.on!.proxyReq!(upstreamReq as any, req as any, res as any, {} as any)
+    upstreamReq.reusedSocket = true
+    upstreamReq.emit('socket', {})
 
     const traceparent = upstreamReq.setHeader.mock.calls.find(([name]) => name === 'traceparent')?.[1]
     expect(traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/)
@@ -145,11 +149,20 @@ describe('runner proxy telemetry', () => {
 
     expect(spans('box.runner_proxy_upstream')).toHaveLength(1)
     expect(spans('box.runner_proxy_upstream')[0].attributes.box_id).toBe('box-uuid')
-    expect(spans('box.runner_proxy_upstream')[0].attributes['http.status_code']).toBe(201)
+    expect(spans('box.runner_proxy_upstream')[0].attributes).toMatchObject({
+      'http.status_code': 201,
+      'runner.protocol': 'http',
+      'runner.reused_socket': true,
+    })
+    expect(JSON.stringify(spans('box.runner_proxy_upstream')[0].attributes)).not.toContain('runner-key')
     expect(traceparent).toContain(spans('box.runner_proxy_upstream')[0].spanContext().traceId)
     const points = await histogramPoints('box_runner_proxy_upstream_duration')
     expect(points).toHaveLength(1)
-    expect(points[0].attributes).toMatchObject({ status: 'success' })
+    expect(points[0].attributes).toMatchObject({
+      status: 'success',
+      protocol: 'http',
+      reused_socket: 'true',
+    })
     expect(points[0].attributes).not.toHaveProperty('box_id')
     expect(points[0].attributes).not.toHaveProperty('execution_id')
     expect(await histogramPoints('box_runner_proxy_ttfb_duration')).toHaveLength(1)
@@ -170,16 +183,17 @@ describe('runner proxy telemetry', () => {
 
     expect(spans('box.runner_proxy_upstream')).toHaveLength(1)
     expect(spans('box.runner_proxy_upstream')[0].status.code).toBe(SpanStatusCode.ERROR)
-    const points = await histogramPoints('box_runner_proxy_upstream_duration')
+    const points = (await histogramPoints('box_runner_proxy_upstream_duration')).filter(
+      (point) => point.attributes.status === status,
+    )
     expect(points).toHaveLength(1)
-    expect(points[0].attributes.status).toBe(status)
   })
 
   function wsHarness(authorized = true) {
     jest.mocked(createProxyMiddleware).mockReturnValue({ upgrade: jest.fn() } as never)
     const service = new BoxliteWsProxyService(
       {
-        getApiKeyByValue: jest.fn().mockResolvedValue(
+        findApiKey: jest.fn().mockResolvedValue(
           authorized
             ? {
                 organizationId: 'org-1',
@@ -189,6 +203,7 @@ describe('runner proxy telemetry', () => {
               }
             : null,
         ),
+        findUser: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'user', email: 'dev@acme.test' }),
       } as any,
       { findOne: jest.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' }) } as any,
       { findOne: jest.fn().mockResolvedValue({ id: 'org-1', suspended: false }) } as any,
@@ -196,13 +211,14 @@ describe('runner proxy telemetry', () => {
         findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: false }),
         updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
       } as any,
-      { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }) } as any,
+      { findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }) } as any,
       { ensureReady: jest.fn() } as any,
-      { findOne: jest.fn().mockResolvedValue({ id: 'user-1', role: 'user', email: 'dev@acme.test' }) } as any,
       undefined,
       {} as any,
       { createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }), updateLog: jest.fn().mockResolvedValue({}) } as any,
+      { http: {}, https: {} } as any,
     )
+    Object.assign(service, { redis: { get: jest.fn().mockResolvedValue(null), eval: jest.fn().mockResolvedValue(1) } })
     return { service, options: jest.mocked(createProxyMiddleware).mock.calls[0][0] }
   }
 
@@ -221,6 +237,8 @@ describe('runner proxy telemetry', () => {
 
     const upstreamReq = proxyRequest()
     options.on!.proxyReqWs!(upstreamReq as any, req as any, clientSocket as any, {} as any, Buffer.alloc(0))
+    upstreamReq.reusedSocket = true
+    upstreamReq.emit('socket', {})
     const traceparent = upstreamReq.setHeader.mock.calls.find(([name]) => name === 'traceparent')?.[1]
     expect(traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/)
 
@@ -231,8 +249,13 @@ describe('runner proxy telemetry', () => {
     expect(spans('box.exec.ws_handshake')[0].attributes).toMatchObject({
       box_id: 'box-uuid',
       execution_id: 'exec-1',
+      'runner.protocol': 'http',
+      'runner.reused_socket': true,
     })
+    expect(JSON.stringify(spans('box.exec.ws_handshake')[0].attributes)).not.toContain('runner-key')
     expect(traceparent).toContain(spans('box.exec.ws_handshake')[0].spanContext().traceId)
+    const handshakePoints = await histogramPoints('box_exec_ws_handshake_duration')
+    expect(handshakePoints[0].attributes).toMatchObject({ protocol: 'http', reused_socket: 'true' })
 
     options.on!.close!({} as any, upstreamSocket as any, Buffer.alloc(0))
     clientSocket.emit('close')
@@ -299,6 +322,25 @@ describe('runner proxy telemetry', () => {
 
     expect(spans('box.exec.ws_handshake')[0].status.code).toBe(SpanStatusCode.ERROR)
     expect(spans('box.exec.ws')[0].status.code).toBe(SpanStatusCode.ERROR)
+  })
+
+  it('destroys a runner upgrade that has not completed by the handshake deadline', async () => {
+    jest.useFakeTimers()
+    const { service, options } = wsHarness()
+    const clientSocket = socket()
+    const req = {
+      url: '/api/v1/org-1/boxes/public-box/executions/exec-1/attach',
+      headers: { authorization: 'Bearer blk_live_test' },
+    }
+    await service.upgrade(req as any, clientSocket as any, Buffer.alloc(0))
+    const upstreamReq = proxyRequest()
+    options.on!.proxyReqWs!(upstreamReq as any, req as any, clientSocket as any, {} as any, Buffer.alloc(0))
+
+    jest.advanceTimersByTime(9_999)
+    expect(upstreamReq.destroy).not.toHaveBeenCalled()
+    jest.advanceTimersByTime(1)
+
+    expect(upstreamReq.destroy).toHaveBeenCalledWith(expect.any(Error))
   })
 
   it('uses a monotonic clock for timed operation durations', async () => {

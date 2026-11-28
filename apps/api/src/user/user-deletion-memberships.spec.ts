@@ -135,6 +135,10 @@ async function createServices(sharedDefault: boolean) {
             timeline.push(`del ${key}`)
             return 1
           },
+          eval: async (_script: string, _count: number, _generation: string, key: string) => {
+            timeline.push(`invalidate ${key}`)
+            return 1
+          },
         },
       },
       {
@@ -180,8 +184,11 @@ describe('review regressions: account deletion', () => {
           [
             'del api-key:validation:default-deleted',
             'del api-key:validation:invited-deleted',
-            'del organization-user:default:deleted',
-            'del organization-user:invited:deleted',
+            'invalidate organization-user:default:deleted',
+            'invalidate organization-user:invited:deleted',
+            ...(sharedDefault
+              ? ['invalidate organization-user:default:remaining']
+              : ['invalidate organization:default']),
             'leave default:deleted',
             'leave invited:deleted',
           ].sort(),

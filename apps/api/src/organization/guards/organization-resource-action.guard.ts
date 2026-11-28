@@ -19,6 +19,7 @@ import { isProxyContext } from '../../common/interfaces/proxy-context.interface'
 import { isRegionProxyContext } from '../../common/interfaces/region-proxy.interface'
 import { OR_GUARD_INNER_GUARDS } from '../../auth/or.guard'
 import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 // Machine identities carry no organization — ApiKeyStrategy mints a bare
 // { role } context for the runner, the proxy and the region proxy — so
@@ -48,6 +49,7 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
   ) {
     super(organizationService, organizationUserService)
   }
+  @WithInstrumentation('auth.organization_resource_action')
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest()
     if (this.handlerAllowsMachineResourceAccess(context, request.user)) {

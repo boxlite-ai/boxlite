@@ -6,8 +6,11 @@
 
 import { Injectable, Logger } from '@nestjs/common'
 import { DataSource } from 'typeorm'
+import { TtlLruCache } from '../../common/utils/ttl-lru-cache.util'
+import { Singleflight } from '../../common/utils/singleflight.util'
 import {
   boxLookupCacheKeyByAuthToken,
+  BOX_ORG_ID_CACHE_TTL_MS,
   boxLookupCacheKeyById,
   boxLookupCacheKeyByName,
   boxOrgIdCacheKeyById,
@@ -29,8 +32,25 @@ type InvalidateBoxLookupCacheArgs =
 @Injectable()
 export class BoxLookupCacheInvalidationService {
   private readonly logger = new Logger(BoxLookupCacheInvalidationService.name)
+  private readonly organizationIdCache = new TtlLruCache<string, string>(10_000, BOX_ORG_ID_CACHE_TTL_MS)
+  private readonly organizationIdSingleflight = new Singleflight()
 
   constructor(private readonly dataSource: DataSource) {}
+
+  async getOrganizationId(cacheKey: string, loader: () => Promise<string | null>): Promise<string | null> {
+    const cached = this.getCachedOrganizationId(cacheKey)
+    if (cached !== undefined) return cached
+
+    return this.organizationIdSingleflight.run(cacheKey, async () => {
+      const organizationId = await loader()
+      if (organizationId) this.organizationIdCache.set(cacheKey, organizationId)
+      return organizationId
+    })
+  }
+
+  getCachedOrganizationId(cacheKey: string): string | undefined {
+    return this.organizationIdCache.get(cacheKey)
+  }
 
   invalidate(args: InvalidateBoxLookupCacheArgs): void {
     const cache = this.dataSource.queryResultCache
@@ -104,11 +124,6 @@ export class BoxLookupCacheInvalidationService {
     previousOrganizationId?: string | null
     previousName?: string | null
   }): void {
-    const cache = this.dataSource.queryResultCache
-    if (!cache) {
-      return
-    }
-
     const organizationIds = Array.from(
       new Set(
         [args.organizationId, args.previousOrganizationId].filter((id): id is string =>
@@ -143,6 +158,11 @@ export class BoxLookupCacheInvalidationService {
     for (const boxName of names) {
       cacheIds.push(boxOrgIdCacheKeyByName({ boxName }))
     }
+
+    for (const cacheId of cacheIds) this.organizationIdCache.delete(cacheId)
+
+    const cache = this.dataSource.queryResultCache
+    if (!cache) return
 
     cache
       .remove(cacheIds)

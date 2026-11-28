@@ -64,6 +64,14 @@ describe('Checkpoint REST authentication and request admission', () => {
         entries.set(key, value)
         return 'OK'
       },
+      eval: async (_script: string, _count: number, _generation: string, key: string, ...args: string[]) => {
+        if (args.length === 0) {
+          entries.delete(key)
+          return 1
+        }
+        entries.set(key, args[1])
+        return 1
+      },
     }
     const users = {
       findOne: async (id: string) => ({

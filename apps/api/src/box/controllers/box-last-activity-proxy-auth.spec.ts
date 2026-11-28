@@ -76,6 +76,7 @@ describe('BoxController reached by the preview proxy', () => {
             duplicate: jest.fn(() => subscriber),
             get: jest.fn().mockResolvedValue(null),
             set: jest.fn().mockResolvedValue('OK'),
+            eval: jest.fn().mockResolvedValue(1),
           },
         },
       ],

@@ -27,6 +27,7 @@ function createGuard() {
   const redis = {
     get: jest.fn().mockResolvedValue(null),
     set: jest.fn().mockResolvedValue('OK'),
+    eval: jest.fn().mockResolvedValue(1),
   }
   const organizationService = {
     findOne: jest.fn().mockResolvedValue(organization),
@@ -86,6 +87,31 @@ describe('OrganizationAccessGuard', () => {
 
     expect(mocks.organizationService.findOne).not.toHaveBeenCalled()
     expect(mocks.organizationUserService.findOne).not.toHaveBeenCalled()
+  })
+
+  it('coalesces organization and membership reads for concurrent requests', async () => {
+    const { guard, mocks } = createGuard()
+    let release!: (value: Record<string, unknown>) => void
+    const pending = new Promise<Record<string, unknown>>((resolve) => (release = resolve))
+    mocks.organizationService.findOne.mockReturnValue(pending)
+    const request = () => ({
+      params: { prefix: 'org-123' },
+      user: {
+        userId: 'user-1',
+        email: 'user@example.com',
+        role: SystemRole.USER,
+        organizationId: 'org-123',
+        apiKey: { organizationId: 'org-123' },
+      },
+    })
+
+    const first = guard.canActivate(httpContext(request()))
+    const second = guard.canActivate(httpContext(request()))
+    release({ id: 'org-123' })
+
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true])
+    expect(mocks.organizationService.findOne).toHaveBeenCalledTimes(1)
+    expect(mocks.organizationUserService.findOne).toHaveBeenCalledTimes(1)
   })
 
   // The membership lookup answers for any user: TypeORM drops a where condition

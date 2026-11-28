@@ -17,6 +17,8 @@ import { Context } from '../context/context'
 import { BoxService } from '../../box/services/box.service'
 import { BoxliteBoxController } from '../../boxlite-rest/boxlite-box.controller'
 import { RunnerService } from '../../box/services/runner.service'
+import { Singleflight } from '../utils/singleflight.util'
+import { TtlLruCache } from '../utils/ttl-lru-cache.util'
 import { ImageAdmissionService } from '../../image/services/image-admission.service'
 import { ImageResolverService } from '../../image/services/image-resolver.service'
 import { BoxStateWaiterService } from '../../box/services/box-state-waiter.service'
@@ -225,18 +227,23 @@ describe('API timing trace relationships', () => {
       runnerId: 'runner-1',
       autoResume: true,
       autoStop: 0,
-      state: BoxState.STARTED,
-      desiredState: BoxDesiredState.STARTED,
+      state: BoxState.STOPPED,
+      desiredState: BoxDesiredState.STOPPED,
       inboundEnabled: true,
     }
+    const startedBox = { ...box, state: BoxState.STARTED, desiredState: BoxDesiredState.STARTED }
     const boxService = {
-      boxRepository: { findOne: jest.fn().mockResolvedValue(box) },
+      boxRepository: {
+        findOne: jest.fn().mockResolvedValue(box),
+        conditionalStartForProxy: jest.fn().mockResolvedValue(startedBox),
+      },
       boxActivityService: { updateLastActivityAt: jest.fn().mockResolvedValue(undefined) },
       organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
       eventEmitter: { emit: jest.fn() },
       findOneByIdOrName: BoxService.prototype.findOneByIdOrName,
       updateLastActivityAt: BoxService.prototype.updateLastActivityAt,
       ensureStartedForProxy: BoxService.prototype.ensureStartedForProxy,
+      assertOrganizationIsNotSuspended: BoxService.prototype.assertOrganizationIsNotSuspended,
     }
     const autoResume = Object.assign(Object.create(BoxAutoResumeService.prototype), {
       boxService,
@@ -244,11 +251,19 @@ describe('API timing trace relationships', () => {
       redisLockProvider: { lock: jest.fn().mockResolvedValue(true), unlock: jest.fn().mockResolvedValue(undefined) },
     })
     const runnerService = Object.assign(Object.create(RunnerService.prototype), {
+      lookupSingleflight: new Singleflight(),
+      proxyTargetCache: new TtlLruCache(10, 60_000),
       runnerRepository: {
         findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
       },
     })
-    const controller = new BoxliteProxyController(boxService as any, runnerService, autoResume, {} as any)
+    const controller = new BoxliteProxyController(
+      boxService as any,
+      runnerService,
+      autoResume,
+      {} as any,
+      { forTarget: () => ({}) } as any,
+    )
     const req = {
       method: 'POST',
       url: '/exec',

@@ -3,10 +3,12 @@
 
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Injectable, Logger } from '@nestjs/common'
-import axios from 'axios'
+import { fetchCommerceOrganizationPlan } from '../../common/utils/commerce-organization-plan.util'
 import { Redis } from 'ioredis'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { PerBoxLimits } from '../../box/services/per-box-limits'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
+import { recordApiModuleCacheAccess } from '../../common/utils/cache-metrics.util'
 
 const DEFAULT_LIMITS: PerBoxLimits = { maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 }
 const CACHE_TTL_SECONDS = 30
@@ -29,6 +31,7 @@ export class OrganizationBoxLimitsService {
     @InjectRedis() private readonly redis: Redis,
   ) {}
 
+  @WithInstrumentation('commerce.box_resource_limits_resolve')
   async resolve(organization: PerBoxLimits & { id: string }): Promise<PerBoxLimits> {
     const { maxCpuPerBox, maxMemoryPerBox, maxDiskPerBox } = organization
     const stored = { maxCpuPerBox, maxMemoryPerBox, maxDiskPerBox }
@@ -73,18 +76,17 @@ export class OrganizationBoxLimitsService {
     const cached = await this.getCachedLimits(cacheKey)
     if (cached) return cached
 
-    const { data } = await axios.get<unknown>(
-      `${baseUrl.replace(/\/+$/, '')}/organization/${encodeURIComponent(organizationId)}/plan`,
-      { timeout: 2_000, maxRedirects: 0, headers: { authorization: `Bearer ${token}` } },
-    )
+    const { data } = await fetchCommerceOrganizationPlan(baseUrl, organizationId, token)
     const limits = this.parseLimits(data) ?? { ...DEFAULT_LIMITS }
     await this.cacheLimits(cacheKey, limits)
     return limits
   }
 
+  @WithInstrumentation('commerce.box_resource_limits_cache_read')
   private async getCachedLimits(cacheKey: string): Promise<PerBoxLimits | undefined> {
     try {
       const cached = await this.withCacheTimeout(this.redis.get(cacheKey))
+      recordApiModuleCacheAccess('commerce_box_resource_limits', cached === null ? 'miss' : 'hit')
       if (cached === null) return undefined
       const record: unknown = JSON.parse(cached)
       if (!isRecord(record) || typeof record.expiresAt !== 'number' || !Number.isSafeInteger(record.expiresAt)) {

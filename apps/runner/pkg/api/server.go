@@ -45,37 +45,40 @@ import (
 )
 
 type ApiServerConfig struct {
-	Logger      *slog.Logger
-	ApiPort     int
-	ApiToken    string
-	TLSCertFile string
-	TLSKeyFile  string
-	EnableTLS   bool
-	LogRequests bool
+	Logger               *slog.Logger
+	ApiPort              int
+	ApiToken             string
+	TLSCertFile          string
+	TLSKeyFile           string
+	EnableTLS            bool
+	LogRequests          bool
+	DirectCreateExecutor controllers.DirectCreateExecutor
 }
 
 func NewApiServer(config ApiServerConfig) *ApiServer {
 	return &ApiServer{
-		logger:      config.Logger.With(slog.String("component", "server")),
-		apiPort:     config.ApiPort,
-		apiToken:    config.ApiToken,
-		tlsCertFile: config.TLSCertFile,
-		tlsKeyFile:  config.TLSKeyFile,
-		enableTLS:   config.EnableTLS,
-		logRequests: config.LogRequests,
+		logger:               config.Logger.With(slog.String("component", "server")),
+		apiPort:              config.ApiPort,
+		apiToken:             config.ApiToken,
+		tlsCertFile:          config.TLSCertFile,
+		tlsKeyFile:           config.TLSKeyFile,
+		enableTLS:            config.EnableTLS,
+		logRequests:          config.LogRequests,
+		directCreateExecutor: config.DirectCreateExecutor,
 	}
 }
 
 type ApiServer struct {
-	logger      *slog.Logger
-	apiPort     int
-	apiToken    string
-	tlsCertFile string
-	tlsKeyFile  string
-	enableTLS   bool
-	httpServer  *http.Server
-	router      *gin.Engine
-	logRequests bool
+	logger               *slog.Logger
+	apiPort              int
+	apiToken             string
+	tlsCertFile          string
+	tlsKeyFile           string
+	enableTLS            bool
+	httpServer           *http.Server
+	router               *gin.Engine
+	logRequests          bool
+	directCreateExecutor controllers.DirectCreateExecutor
 }
 
 func (a *ApiServer) Start(ctx context.Context) error {
@@ -120,6 +123,9 @@ func (a *ApiServer) Start(ctx context.Context) error {
 
 	protected := a.router.Group("/")
 	protected.Use(middlewares.AuthMiddleware(a.apiToken))
+	if a.directCreateExecutor != nil {
+		protected.POST("/internal/jobs/:jobId/direct-create", controllers.DirectCreate(a.directCreateExecutor))
+	}
 
 	metricsController := protected.Group("/metrics")
 	{

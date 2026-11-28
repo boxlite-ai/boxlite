@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import http from 'node:http'
+import { AddressInfo } from 'node:net'
 import { DataSource } from 'typeorm'
 import { AddSecretCredential1794873600000 } from '../../migrations/pre-deploy/1794873600000-add-secret-credential-migration'
 import { SecretCredentialService } from './secret-credential.service'
@@ -7,7 +9,9 @@ import { JobService } from './job.service'
 import { Job } from '../entities/job.entity'
 import { RunnerAdapterV2 } from '../runner-adapter/runnerAdapter.v2'
 import { JobType } from '../enums/job-type.enum'
+import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
+import { RunnerState } from '../enums/runner-state.enum'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
@@ -208,6 +212,121 @@ import { Context } from '../../common/context/context'
     )
     expect(await db.getRepository(Job).count()).toBe(1)
     expect(atNotification).toEqual({ jobs: 1, boxLocked: false })
+  })
+
+  it('directly dispatches a visible secret-bearing IN_PROGRESS job after releasing the Box lock', async () => {
+    let atDispatch: { jobs: number; boxLocked: boolean } | undefined
+    let dispatchedJob: any
+    let authorization: string | undefined
+    let dispatchError: unknown
+    const server = http.createServer((request, response) => {
+      void (async () => {
+        try {
+          authorization = request.headers.authorization
+          const chunks: Buffer[] = []
+          for await (const chunk of request) chunks.push(Buffer.from(chunk))
+          dispatchedJob = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+          expect(request.method).toBe('POST')
+          expect(request.url).toMatch(/^\/internal\/jobs\/.+\/direct-create$/)
+
+          const observer = db.createQueryRunner()
+          await observer.startTransaction()
+          try {
+            const [{ count }] = await observer.query('SELECT count(*)::int FROM job')
+            let boxLocked = false
+            try {
+              await observer.query('SELECT id FROM box WHERE id = $1 FOR UPDATE NOWAIT', [box.id])
+            } catch (error) {
+              if (error.code !== '55P03') throw error
+              boxLocked = true
+            }
+            atDispatch = { jobs: count, boxLocked }
+          } finally {
+            await observer.rollbackTransaction()
+            await observer.release()
+          }
+          response.writeHead(202).end()
+        } catch (error) {
+          dispatchError = error
+          response.writeHead(500).end()
+        }
+      })()
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const address = server.address() as AddressInfo
+      const lpush = jest.fn()
+      const jobs = new JobService(db.getRepository(Job), { lpush } as any, {} as any)
+      const adapter = new RunnerAdapterV2(repository, db.getRepository(Job), jobs)
+      Object.assign(adapter, {
+        config: {
+          get: (key: string) => key === 'secretServer.enabled' || key === 'runnerDirectCreate.enabled',
+        },
+        credentials,
+      })
+      await adapter.init({
+        id: binding.runnerId,
+        state: RunnerState.READY,
+        capabilities: ['direct-create-v1'],
+        apiUrl: `http://127.0.0.1:${address.port}`,
+        apiKey: 'runner-direct-key',
+      } as any)
+
+      await adapter.createBox({ ...box, secrets: [{ secretId: binding.secretIds[0], name: 'test' }] } as any, 'base')
+
+      expect(dispatchError).toBeUndefined()
+      expect(authorization).toBe('Bearer runner-direct-key')
+      expect(atDispatch).toEqual({ jobs: 1, boxLocked: false })
+      expect(dispatchedJob).toEqual(
+        expect.objectContaining({
+          type: JobType.CREATE_BOX,
+          status: JobStatus.IN_PROGRESS,
+          resourceType: ResourceType.BOX,
+          resourceId: box.id,
+          createdAt: expect.any(String),
+          updatedAt: expect.any(String),
+        }),
+      )
+      expect(JSON.parse(dispatchedJob.payload).secretCredential).toBeDefined()
+      expect(await db.getRepository(Job).findOneByOrFail({ id: dispatchedJob.id })).toEqual(
+        expect.objectContaining({ status: JobStatus.IN_PROGRESS, startedAt: expect.any(Date) }),
+      )
+      expect(lpush).not.toHaveBeenCalled()
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    }
+  })
+
+  it('keeps a direct job IN_PROGRESS when the Runner rejects dispatch', async () => {
+    const server = http.createServer((_request, response) => response.writeHead(503).end())
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const address = server.address() as AddressInfo
+      const lpush = jest.fn()
+      const jobs = new JobService(db.getRepository(Job), { lpush } as any, {} as any)
+      const adapter = new RunnerAdapterV2(repository, db.getRepository(Job), jobs)
+      Object.assign(adapter, {
+        config: { get: (key: string) => key === 'runnerDirectCreate.enabled' },
+        credentials,
+      })
+      await adapter.init({
+        id: binding.runnerId,
+        state: RunnerState.READY,
+        capabilities: ['direct-create-v1'],
+        apiUrl: `http://127.0.0.1:${address.port}`,
+        apiKey: 'runner-direct-key',
+      } as any)
+
+      await expect(adapter.createBox(box, 'base')).rejects.toThrow('Direct CREATE_BOX dispatch failed')
+
+      expect(await db.getRepository(Job).findOneByOrFail({ resourceId: box.id })).toEqual(
+        expect.objectContaining({ status: JobStatus.IN_PROGRESS, startedAt: expect.any(Date) }),
+      )
+      expect(await db.getRepository(Job).count()).toBe(1)
+      expect(lpush).not.toHaveBeenCalled()
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    }
   })
 
   it('revokes by box_id without scanning unrelated credentials', async () => {

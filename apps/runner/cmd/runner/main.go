@@ -209,6 +209,7 @@ func run() int {
 	}
 
 	boxBackend := backend.NewBoxliteAdapter(boxliteClient)
+	var executorService *executor.Executor
 
 	if cfg.ApiVersion == 2 {
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
@@ -236,7 +237,7 @@ func run() int {
 			healthcheckService.Start(ctx)
 		}()
 
-		executorService, err := executor.NewExecutor(&executor.ExecutorConfig{
+		executorService, err = executor.NewExecutor(&executor.ExecutorConfig{
 			Logger:            logger,
 			Backend:           boxBackend,
 			Collector:         metricsCollector,
@@ -267,13 +268,14 @@ func run() int {
 	}
 
 	apiServer := api.NewApiServer(api.ApiServerConfig{
-		Logger:      logger,
-		ApiPort:     cfg.ApiPort,
-		ApiToken:    cfg.ApiToken,
-		TLSCertFile: cfg.TLSCertFile,
-		TLSKeyFile:  cfg.TLSKeyFile,
-		EnableTLS:   cfg.EnableTLS,
-		LogRequests: cfg.ApiLogRequests,
+		Logger:               logger,
+		ApiPort:              cfg.ApiPort,
+		ApiToken:             cfg.ApiToken,
+		TLSCertFile:          cfg.TLSCertFile,
+		TLSKeyFile:           cfg.TLSKeyFile,
+		EnableTLS:            cfg.EnableTLS,
+		LogRequests:          cfg.ApiLogRequests,
+		DirectCreateExecutor: executorService,
 	})
 
 	apiServerErrChan := make(chan error)

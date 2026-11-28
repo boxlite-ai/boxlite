@@ -13,17 +13,21 @@ import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationUser } from '../entities/organization-user.entity'
+import { OrganizationAccessCache } from '../services/organization-access-cache.service'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 @Injectable()
 export class OrganizationAccessGuard implements CanActivate {
   protected readonly logger = new Logger(OrganizationAccessGuard.name)
   @InjectRedis() private readonly redis: Redis
+  private accessCache?: OrganizationAccessCache
 
   constructor(
     private readonly organizationService: OrganizationService,
     private readonly organizationUserService: OrganizationUserService,
   ) {}
 
+  @WithInstrumentation('auth.organization_access')
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest()
     // TODO: initialize authContext safely
@@ -123,20 +127,10 @@ export class OrganizationAccessGuard implements CanActivate {
 
   private async getCachedOrganization(organizationId: string): Promise<Organization | null> {
     try {
-      const cachedOrganization = await this.redis.get(`organization:${organizationId}`)
-      if (cachedOrganization) {
-        const organization = JSON.parse(cachedOrganization)
-        if (organization.suspendedUntil != null) {
-          organization.suspendedUntil = new Date(organization.suspendedUntil)
-        }
-        return organization
-      }
-      const organization = await this.organizationService.findOne(organizationId)
-      if (organization) {
-        await this.redis.set(`organization:${organizationId}`, JSON.stringify(organization), 'EX', 10)
-        return organization
-      }
-      return null
+      this.accessCache ??= new OrganizationAccessCache(this.redis)
+      return await this.accessCache.getOrganization(organizationId, () =>
+        this.organizationService.findOne(organizationId),
+      )
     } catch (error) {
       this.logger.error('Error getting cached organization:', error)
       return null
@@ -144,18 +138,11 @@ export class OrganizationAccessGuard implements CanActivate {
   }
 
   private async getCachedOrganizationUser(organizationId: string, userId: string): Promise<OrganizationUser | null> {
-    const cacheKey = OrganizationUserService.membershipCacheKey(organizationId, userId)
     try {
-      const cachedOrganizationUser = await this.redis.get(cacheKey)
-      if (cachedOrganizationUser) {
-        return JSON.parse(cachedOrganizationUser)
-      }
-      const organizationUser = await this.organizationUserService.findOne(organizationId, userId)
-      if (organizationUser) {
-        await this.redis.set(cacheKey, JSON.stringify(organizationUser), 'EX', 10)
-        return organizationUser
-      }
-      return null
+      this.accessCache ??= new OrganizationAccessCache(this.redis)
+      return await this.accessCache.getOrganizationUser(organizationId, userId, () =>
+        this.organizationUserService.findOne(organizationId, userId),
+      )
     } catch (ex) {
       this.logger.error('Error getting cached organization user:', ex)
       return null

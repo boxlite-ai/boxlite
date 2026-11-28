@@ -19,6 +19,7 @@ import { propagation, context as otelContext } from '@opentelemetry/api'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import { runnerJobQueueKey } from '../constants/runner-job-queue'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
+import { isUUID } from 'class-validator'
 
 const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
@@ -38,7 +39,8 @@ export class JobService {
   /**
    * Create a job within the provided transaction manager
    * With a manager, the transaction owner must call notifyRunner after commit.
-   * With null, insertion commits before this method notifies the runner.
+   * With null, queued insertion commits before this method notifies the runner.
+   * Direct CREATE_BOX insertion starts IN_PROGRESS and leaves dispatch to the caller.
    * @template T The JobType enum value - ensures compile-time type safety for resourceType and payload
    */
   @WithInstrumentation('box.job_create')
@@ -49,6 +51,7 @@ export class JobService {
     resourceType: ResourceTypeForJobType<T>,
     resourceId: string,
     payload?: string | Record<string, any>,
+    options: { direct?: boolean } = {},
   ): Promise<Job> {
     // Use provided manager if available, otherwise use default repository
     const repo = manager ? manager.getRepository(Job) : this.jobRepository
@@ -59,15 +62,20 @@ export class JobService {
     const encodedPayload = typeof payload === 'string' ? payload : payload ? JSON.stringify(payload) : undefined
 
     try {
+      const now = new Date()
       const job = new Job({
         type,
         runnerId,
         resourceType,
         resourceId,
-        status: JobStatus.PENDING,
+        status: options.direct ? JobStatus.IN_PROGRESS : JobStatus.PENDING,
         payload: encodedPayload,
         traceContext,
       })
+      if (options.direct) {
+        job.startedAt = now
+        job.updatedAt = now
+      }
 
       await repo.insert(job)
 
@@ -76,7 +84,7 @@ export class JobService {
 
       this.logger.debug(`Created job ${job.id} of type ${type} for ${contextInfo} on runner ${runnerId}`)
 
-      if (!manager) await this.notifyRunner(runnerId, job.id)
+      if (!manager && !options.direct) await this.notifyRunner(runnerId, job.id)
 
       return job
     } catch (error) {
@@ -297,6 +305,77 @@ export class JobService {
     return updatedJob
   }
 
+  @WithInstrumentation('box.job_status_update')
+  async updateRunnerJobStatus(
+    jobId: string,
+    runnerId: string,
+    status: JobStatus,
+    errorMessage?: string,
+    resultMetadata?: string,
+  ): Promise<Job> {
+    if (!isUUID(jobId)) {
+      throw new NotFoundException(`Job with ID ${jobId} not found`)
+    }
+
+    const now = new Date()
+    const [rows] = (await this.jobRepository.query(
+      `UPDATE job AS j
+       SET status=$3,
+           "errorMessage"=COALESCE($4, "errorMessage"),
+           "resultMetadata"=COALESCE($5, "resultMetadata"),
+           "startedAt"=CASE
+             WHEN $3='IN_PROGRESS' AND "startedAt" IS NULL THEN $6
+             ELSE "startedAt"
+           END,
+           "completedAt"=CASE
+             WHEN $3 IN ('COMPLETED', 'FAILED') THEN $6
+             ELSE "completedAt"
+           END,
+           payload=CASE
+             WHEN $3 IN ('COMPLETED', 'FAILED')
+               AND j.type='CREATE_BOX'
+               AND pg_input_is_valid(j.payload, 'jsonb')
+               AND jsonb_typeof(j.payload::jsonb)='object'
+               AND (j.payload::jsonb->'secretCredential') NOT IN (
+                 'null'::jsonb, 'false'::jsonb, '0'::jsonb, '""'::jsonb
+               )
+             THEN (j.payload::jsonb - 'secretCredential')::text
+             ELSE j.payload
+           END,
+           "updatedAt"=$6,
+           version=j.version+1
+       WHERE j.id=$1
+         AND "runnerId"=$2
+         AND (
+           j.status=$3
+           OR (j.status='PENDING' AND $3 IN ('IN_PROGRESS', 'FAILED'))
+           OR (j.status='IN_PROGRESS' AND $3 IN ('COMPLETED', 'FAILED'))
+         )
+       RETURNING j.*`,
+      [jobId, runnerId, status, errorMessage || null, resultMetadata || null, now],
+    )) as [Job[], number]
+
+    if (rows.length === 0) {
+      const job = await this.jobRepository.findOneBy({ id: jobId })
+      if (!job || job.runnerId !== runnerId) {
+        throw new NotFoundException(`Job with ID ${jobId} not found`)
+      }
+      throw new ConflictException(`Invalid job status transition from ${job.status} to ${status} for job ${jobId}`)
+    }
+
+    const updatedJob = Object.assign(Object.create(Job.prototype) as Job, rows[0])
+    this.logger.debug(`Updated job ${jobId} status to ${status}`)
+
+    if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
+      // Fire and forget - don't block the response
+      this.jobStateHandlerService.handleJobCompletion(updatedJob).catch((error) => {
+        this.logger.error(`Error handling job completion for job ${jobId}:`, error)
+      })
+    }
+
+    return updatedJob
+  }
+
   async findPendingJobsForRunner(runnerId: string, limit = 10): Promise<Job[]> {
     return this.jobRepository.find({
       where: {
@@ -459,57 +538,37 @@ export class JobService {
    * This prevents duplicate processing of the same job
    */
   private async claimPendingJobs(runnerId: string, limit: number): Promise<JobDto[]> {
-    // Find pending jobs
-    const jobs = await this.jobRepository.find({
-      where: {
-        runnerId,
-        status: JobStatus.PENDING,
-      },
-      order: {
-        createdAt: 'ASC',
-      },
-      take: limit,
-    })
-
-    if (jobs.length === 0) {
-      return []
-    }
-
     const now = new Date()
-    // A single conditional UPDATE prevents a later-row error from leaving
-    // earlier claims committed. The status predicate retains the compare-and-swap,
-    // so a concurrent poll may still win a subset of these candidates.
-    const claim = await this.jobRepository.update(
-      {
-        id: In(jobs.map((job) => job.id)),
-        status: JobStatus.PENDING,
-      },
-      {
-        status: JobStatus.IN_PROGRESS,
-        startedAt: now,
-        updatedAt: now,
-      },
-      { returning: ['id'] },
-    )
-    const claimedIds = new Set((claim.raw as Array<Pick<Job, 'id'>>).map((row) => row.id))
-    const claimedJobs: JobDto[] = []
+    const rows = (await this.jobRepository.query(
+      `WITH candidates AS (
+         SELECT id
+         FROM job
+         WHERE "runnerId"=$1 AND status='PENDING'
+         ORDER BY "createdAt" ASC, id ASC
+         LIMIT $2
+         FOR UPDATE SKIP LOCKED
+       ), claimed AS (
+         UPDATE job AS j
+         SET status='IN_PROGRESS',
+             "startedAt"=$3,
+             "updatedAt"=$3,
+             version=j.version+1
+         WHERE j.id IN (SELECT id FROM candidates)
+           AND j.status='PENDING'
+         RETURNING j.*
+       )
+       SELECT * FROM claimed
+       ORDER BY "createdAt" ASC, id ASC`,
+      [runnerId, limit, now],
+    )) as Job[]
 
-    for (const job of jobs) {
-      if (!claimedIds.has(job.id)) {
-        this.logger.debug(`Job ${job.id} was already claimed by a concurrent poll`)
-        continue
-      }
-
-      job.status = JobStatus.IN_PROGRESS
-      job.startedAt = now
-      job.updatedAt = now
-      claimedJobs.push(new JobDto(job))
-    }
-
+    const claimedJobs = rows.map((row) => {
+      const job = Object.assign(Object.create(Job.prototype) as Job, row)
+      return new JobDto(job)
+    })
     if (claimedJobs.length > 0) {
       this.logger.debug(`Claimed ${claimedJobs.length} existing pending jobs for runner ${runnerId}`)
     }
-
     return claimedJobs
   }
 }

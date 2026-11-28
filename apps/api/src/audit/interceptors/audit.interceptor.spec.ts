@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { EventEmitter } from 'node:events'
 import { CallHandler, ExecutionContext } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { firstValueFrom, of, throwError } from 'rxjs'
@@ -11,10 +12,19 @@ import { AuditContext } from '../decorators/audit.decorator'
 import { AuditAction } from '../enums/audit-action.enum'
 import { AuditTarget } from '../enums/audit-target.enum'
 import { AuditInterceptor } from './audit.interceptor'
+import { trace, SpanStatusCode } from '@opentelemetry/api'
+import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { AdminOrganizationNestedVirtualizationController } from '../../admin/controllers/organization-nested-virtualization.controller'
 
 jest.mock('uuid', () => ({ v4: () => 'uuid-test' }))
+
+const originalAsyncWrites = process.env.AUDIT_ASYNC_WRITES_ENABLED
+beforeEach(() => (process.env.AUDIT_ASYNC_WRITES_ENABLED = 'false'))
+afterEach(() => {
+  if (originalAsyncWrites === undefined) delete process.env.AUDIT_ASYNC_WRITES_ENABLED
+  else process.env.AUDIT_ASYNC_WRITES_ENABLED = originalAsyncWrites
+})
 
 describe('AuditInterceptor', () => {
   it.each([false, true])(
@@ -61,6 +71,85 @@ describe('AuditInterceptor', () => {
         )
     },
   )
+
+  it('runs the handler before the pending audit INSERT finishes', async () => {
+    process.env.AUDIT_ASYNC_WRITES_ENABLED = 'true'
+    const auditContext: AuditContext = { action: AuditAction.CREATE, targetType: AuditTarget.BOX }
+    let finishInsert!: (value: { id: string }) => void
+    const auditService = {
+      createLog: jest.fn().mockReturnValue(new Promise((resolve) => (finishInsert = resolve))),
+      updateLog: jest.fn().mockResolvedValue(undefined),
+    }
+    const interceptor = new AuditInterceptor({ get: () => auditContext } as any, auditService as any)
+    const request = {
+      url: '/boxes',
+      user: { userId: 'user-1', email: 'user@example.com', organizationId: 'org-1' },
+      get: jest.fn(),
+    }
+    const context = {
+      getHandler: jest.fn(),
+      switchToHttp: () => ({ getRequest: () => request, getResponse: () => ({ statusCode: 201 }) }),
+    } as unknown as ExecutionContext
+    const handle = jest.fn().mockReturnValue(of({ id: 'box-1' }))
+    const next = { handle } as unknown as CallHandler
+
+    const result = firstValueFrom(interceptor.intercept(context, next))
+    await new Promise(setImmediate)
+    const handlerRan = handle.mock.calls.length === 1
+    finishInsert({ id: 'audit-1' })
+    await expect(result).resolves.toEqual({ id: 'box-1' })
+
+    expect(handlerRan).toBe(true)
+  })
+
+  it('captures a fast response before pending INSERT and never destroys it on lease loss', async () => {
+    process.env.AUDIT_ASYNC_WRITES_ENABLED = 'true'
+    const auditContext: AuditContext = {
+      action: AuditAction.EXECUTE,
+      targetType: AuditTarget.BOX,
+      completion: 'response',
+    }
+    let finishInsert!: (value: { id: string }) => void
+    const leaseController = new AbortController()
+    const lease = {
+      signal: leaseController.signal,
+      ready: Promise.resolve(),
+      complete: jest.fn().mockResolvedValue(undefined),
+    }
+    const auditService = {
+      createLog: jest.fn().mockReturnValue(new Promise((resolve) => (finishInsert = resolve))),
+      leasePendingLog: jest.fn().mockReturnValue(lease),
+      updateLog: jest.fn(),
+    }
+    const interceptor = new AuditInterceptor({ get: () => auditContext } as any, auditService as any)
+    const request = {
+      url: '/boxes/box-1/exec',
+      user: { userId: 'user-1', email: 'user@example.com', organizationId: 'org-1' },
+      get: jest.fn(),
+    }
+    const response = Object.assign(new EventEmitter(), {
+      statusCode: 200,
+      writableFinished: true,
+      destroy: jest.fn(),
+      destroyed: false,
+    })
+    const context = {
+      getHandler: jest.fn(),
+      switchToHttp: () => ({ getRequest: () => request, getResponse: () => response }),
+    } as unknown as ExecutionContext
+
+    const result = firstValueFrom(interceptor.intercept(context, { handle: () => of(undefined) }))
+    await new Promise(setImmediate)
+    expect(response.listenerCount('finish')).toBe(1)
+
+    response.emit('finish')
+    leaseController.abort(new Error('late lease loss'))
+    expect(lease.complete).toHaveBeenCalledTimes(1)
+    expect(response.destroy).not.toHaveBeenCalled()
+
+    finishInsert({ id: 'audit-1' })
+    await expect(result).resolves.toBeUndefined()
+  })
 
   // The context below is synthetic on purpose: since the admin observability
   // controller was deleted, no route emits AuditAction.READ. Metadata keys are
@@ -183,5 +272,36 @@ describe('AuditInterceptor', () => {
       }),
       expect.any(Number),
     )
+  })
+
+  it('measures audit preparation separately from a failing downstream handler', async () => {
+    const exporter = new InMemorySpanExporter()
+    trace.setGlobalTracerProvider(
+      new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] }),
+    )
+    const auditContext: AuditContext = { action: AuditAction.CREATE, targetType: AuditTarget.BOX }
+    const auditService = {
+      createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+      updateLog: jest.fn().mockResolvedValue(undefined),
+    }
+    const interceptor = new AuditInterceptor({ get: () => auditContext } as any, auditService as any)
+    const request = {
+      url: '/boxes',
+      user: { userId: 'user-1', email: 'user@example.com', organizationId: 'org-1' },
+      get: jest.fn(),
+    }
+    const executionContext = {
+      getHandler: jest.fn(),
+      switchToHttp: () => ({ getRequest: () => request, getResponse: () => ({ statusCode: 500 }) }),
+    } as unknown as ExecutionContext
+    const failure = new Error('handler failed')
+
+    await expect(
+      firstValueFrom(interceptor.intercept(executionContext, { handle: () => throwError(() => failure) })),
+    ).rejects.toBe(failure)
+
+    const span = exporter.getFinishedSpans().find((span) => span.name === 'audit.request_prepare')
+    expect(span?.attributes).toMatchObject({ 'audit.async_writes': false })
+    expect(span?.status.code).toBe(SpanStatusCode.OK)
   })
 })

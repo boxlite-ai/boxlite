@@ -71,6 +71,7 @@ export class BoxWarmPoolService {
     //  await this.adHocBackupCheck()
   }
 
+  @WithInstrumentation('box.warm_pool_fetch')
   async fetchWarmPoolBox(params: FetchWarmPoolBoxParams): Promise<Box | null> {
     // Existing pool specifications are integer GiB; a fractional request must
     // neither claim a larger Box nor poison the shared image miss cache.

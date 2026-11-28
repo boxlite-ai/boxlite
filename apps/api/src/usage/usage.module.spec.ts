@@ -12,6 +12,7 @@ import { Box } from '../box/entities/box.entity'
 import { Runner } from '../box/entities/runner.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
+import { TypedConfigService } from '../config/typed-config.service'
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
 import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
@@ -71,14 +72,18 @@ describe('UsageModule', () => {
   })
 
   // This module hand-rolls its own BoxRepository factory instead of importing
-  // BoxModule, so a dependency added, dropped or reordered in the constructor
-  // would silently arrive as `undefined` or in the wrong slot — Nest checks
-  // neither the arity nor the order of a useFactory's inject list.
+  // BoxModule. Assert the exact dependencies it intentionally supplies; the
+  // optional creation-quota adapter belongs only to BoxModule's factory.
   it('injects exactly the BoxRepository constructor parameters, in order', () => {
     const providers = Reflect.getMetadata(MODULE_METADATA.PROVIDERS, UsageModule) as Array<any>
     const boxRepositoryProvider = providers.find((provider) => provider?.provide === BoxRepository)
 
-    expect(boxRepositoryProvider.inject).toEqual([DataSource, EventEmitter2, BoxLookupCacheInvalidationService])
-    expect(boxRepositoryProvider.inject).toHaveLength(BoxRepository.length)
+    expect(boxRepositoryProvider.inject).toEqual([
+      DataSource,
+      EventEmitter2,
+      BoxLookupCacheInvalidationService,
+      TypedConfigService,
+    ])
+    expect(boxRepositoryProvider.inject).toHaveLength(4)
   })
 })

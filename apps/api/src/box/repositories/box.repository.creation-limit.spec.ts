@@ -26,6 +26,16 @@ function makeEntityManager(currentCount = 0) {
     insert: jest.fn().mockResolvedValue(undefined),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
     upsert: jest.fn().mockResolvedValue(undefined),
+    createQueryBuilder: jest.fn(() => {
+      const builder = {
+        insert: () => builder,
+        into: () => builder,
+        values: () => builder,
+        returning: () => builder,
+        getQueryAndParameters: async () => ['INSERT INTO box DEFAULT VALUES RETURNING id, "createdAt"', []],
+      }
+      return builder
+    }),
   }
 }
 
@@ -37,6 +47,7 @@ function makeRepository(currentCount = 0) {
   })
   const repository = { update: jest.fn(), manager: {} }
   const dataSource = {
+    manager: entityManager,
     getRepository: jest.fn(() => repository),
     transaction,
   }
@@ -117,8 +128,9 @@ describe('BoxRepository creation admission', () => {
       Box,
       expect.objectContaining({ where: expect.objectContaining({ organizationId: entity.organizationId }) }),
     )
-    expect(entityManager.insert).toHaveBeenCalledWith(Box, entity)
-    expect(entityManager.upsert).toHaveBeenCalledTimes(1)
+    expect(entityManager.query.mock.calls.some(([sql]) => String(sql).includes('WITH inserted_box AS'))).toBe(true)
+    expect(entityManager.insert).not.toHaveBeenCalled()
+    expect(entityManager.upsert).not.toHaveBeenCalled()
     expect(cacheInvalidation.invalidateOrgId).toHaveBeenCalledTimes(1)
 
     const stateFilter = entityManager.count.mock.calls[0][1].where.state as FindOperator<BoxState>
@@ -172,9 +184,9 @@ describe('BoxRepository creation admission', () => {
     const { boxRepository, entityManager, transaction } = makeRepository(count)
     await boxRepository.insert(box(), limit)
     expect(transaction).toHaveBeenCalledTimes(attempts)
-    expect(entityManager.query).toHaveBeenCalledTimes(attempts + 1)
+    expect(entityManager.query).toHaveBeenCalledTimes(attempts + 2)
     expect(entityManager.count).toHaveBeenCalledTimes(attempts)
-    expect(entityManager.insert).toHaveBeenCalledTimes(1)
+    expect(entityManager.query.mock.calls.some(([sql]) => String(sql).includes('WITH inserted_box AS'))).toBe(true)
   })
 
   it.each([Number.NaN, -1, 12.5, Number.MAX_SAFE_INTEGER + 1])(
@@ -319,7 +331,10 @@ describe('BoxRepository creation admission', () => {
   it.each([3, 100])('propagates a persistence lock timeout at limit %d as the original error', async (limit) => {
     const { boxRepository, entityManager } = makeRepository(0)
     const rowLockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
-    entityManager.insert.mockRejectedValue(rowLockTimeout)
+    entityManager.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('WITH inserted_box AS')) throw rowLockTimeout
+      return []
+    })
 
     const error = await boxRepository.insert(box(), limit).catch((caught) => caught)
 
@@ -340,8 +355,9 @@ describe('BoxRepository creation admission', () => {
 
     await boxRepository.insert(box())
 
-    expect(transaction).toHaveBeenCalledWith(expect.any(Function))
-    expect(entityManager.query).not.toHaveBeenCalled()
+    expect(transaction).not.toHaveBeenCalled()
+    expect(entityManager.query).toHaveBeenCalledTimes(1)
+    expect(entityManager.query.mock.calls[0][0]).toContain('WITH inserted_box AS')
     expect(entityManager.count).not.toHaveBeenCalled()
   })
 })

@@ -176,7 +176,6 @@ export class JobController {
     description: 'Job status updated successfully',
     type: JobDto,
   })
-  @UseGuards(JobAccessGuard)
   async updateJobStatus(
     @RunnerContextDecorator() runnerContext: RunnerContext,
     @Param('jobId') jobId: string,
@@ -184,8 +183,9 @@ export class JobController {
   ): Promise<JobDto> {
     this.logger.debug(`Runner ${runnerContext.runnerId} updating job ${jobId} status to ${updateJobStatusDto.status}`)
 
-    const job = await this.jobService.updateJobStatus(
+    const job = await this.jobService.updateRunnerJobStatus(
       jobId,
+      runnerContext.runnerId,
       updateJobStatusDto.status,
       updateJobStatusDto.errorMessage,
       updateJobStatusDto.resultMetadata,

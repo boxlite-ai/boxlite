@@ -25,6 +25,7 @@ import { AuditService, PendingAuditLease } from '../services/audit.service'
 import { AuthContextType, isAuthContext } from '../../common/interfaces/auth-context.interface'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { AUDIT_WRITE_TIMEOUT_MS, remainingAuditTime } from '../audit-write-deadline'
+import { startTimedOperation } from '../../common/decorators/otel.decorator'
 
 type RequestWithUser = Request & {
   user?: AuthContextType
@@ -70,35 +71,42 @@ export class AuditInterceptor implements NestInterceptor {
     next: CallHandler,
     observer: Subscriber<any>,
   ): Promise<void> {
+    let preparation: ReturnType<typeof startTimedOperation> | undefined
     try {
       const deadline = performance.now() + AUDIT_WRITE_TIMEOUT_MS
+      const asyncWrites = process.env.AUDIT_ASYNC_WRITES_ENABLED !== 'false'
+      preparation = startTimedOperation('audit.request_prepare', { 'audit.async_writes': asyncWrites })
       const actor = this.resolveActor(request.user)
-      const auditLog = await this.auditService.createLog(
-        {
-          actorId: actor.actorId,
-          actorEmail: actor.actorEmail,
-          organizationId: this.resolveOrganizationId(auditContext, request) ?? actor.organizationId,
-          action: auditContext.action,
-          targetType: auditContext.targetType,
-          targetId: this.resolveTargetId(auditContext, request),
-          ipAddress: request.ip,
-          userAgent: request.get('user-agent'),
-          source: request.get(CustomHeaders.SOURCE.name),
-          metadata: this.resolveRequestMetadata(auditContext, request),
-        },
-        remainingAuditTime(deadline),
-      )
+      const input = {
+        actorId: actor.actorId,
+        actorEmail: actor.actorEmail,
+        organizationId: this.resolveOrganizationId(auditContext, request) ?? actor.organizationId,
+        action: auditContext.action,
+        targetType: auditContext.targetType,
+        targetId: this.resolveTargetId(auditContext, request),
+        ipAddress: request.ip,
+        userAgent: request.get('user-agent'),
+        source: request.get(CustomHeaders.SOURCE.name),
+        metadata: this.resolveRequestMetadata(auditContext, request),
+      }
+      const auditLog = asyncWrites
+        ? new AuditLog(input)
+        : await this.auditService.createLog(input, remainingAuditTime(deadline))
+      const pendingWrite = asyncWrites
+        ? this.auditService.createLog(auditLog, remainingAuditTime(deadline))
+        : Promise.resolve(auditLog)
+      if (asyncWrites) void pendingWrite.catch(() => undefined)
 
-      const completeResponse =
-        auditContext.completion === 'response'
-          ? this.observeResponse(
-              auditContext,
-              auditLog,
-              request,
-              response,
-              await this.auditService.keepPendingLogAlive(auditLog.id, remainingAuditTime(deadline)),
-            )
-          : undefined
+      let completeResponse: ((statusCode: number, errorMessage?: string) => void) | undefined
+      if (auditContext.completion === 'response') {
+        const lease = asyncWrites
+          ? this.auditService.leasePendingLog(auditLog.id, remainingAuditTime(deadline), pendingWrite)
+          : await this.auditService.keepPendingLogAlive(auditLog.id, remainingAuditTime(deadline))
+        if (!asyncWrites) await lease.ready
+        completeResponse = this.observeResponse(auditContext, auditLog, request, response, lease, !asyncWrites)
+      }
+      preparation.finish()
+      preparation = undefined
       try {
         remainingAuditTime(deadline)
       } catch (error) {
@@ -118,7 +126,11 @@ export class AuditInterceptor implements NestInterceptor {
         const organizationId = this.resolveOrganizationId(auditContext, request, result)
         const targetId = this.resolveTargetId(auditContext, request, result)
         const statusCode = response.statusCode || HttpStatus.NO_CONTENT
-        if (!completeResponse) await this.recordHandlerSuccess(auditLog, organizationId, targetId, statusCode)
+        if (!completeResponse) {
+          const record = () => this.recordHandlerSuccess(auditLog, organizationId, targetId, statusCode)
+          if (asyncWrites) this.afterPendingWrite(pendingWrite, record, auditLog)
+          else await record()
+        }
 
         observer.next(result)
         observer.complete()
@@ -130,12 +142,15 @@ export class AuditInterceptor implements NestInterceptor {
         if (completeResponse) {
           completeResponse(statusCode, 'Request failed.')
         } else {
-          await this.recordHandlerError(auditLog, errorMessage, statusCode, request[AUDIT_TARGET_ID])
+          const record = () => this.recordHandlerError(auditLog, errorMessage, statusCode, request[AUDIT_TARGET_ID])
+          if (asyncWrites) this.afterPendingWrite(pendingWrite, record, auditLog)
+          else await record()
         }
 
         observer.error(handlerError)
       }
     } catch (createLogError) {
+      preparation?.finish('error', createLogError)
       this.logger.error('Failed to create audit log:', createLogError)
       observer.error(
         createLogError instanceof ServiceUnavailableException ? createLogError : new InternalServerErrorException(),
@@ -149,6 +164,7 @@ export class AuditInterceptor implements NestInterceptor {
     request: RequestWithUser,
     response: Response,
     lease: PendingAuditLease,
+    destroyOnLeaseLoss: boolean,
   ) {
     let completed = false
     const finish = () => complete(response.statusCode)
@@ -160,7 +176,7 @@ export class AuditInterceptor implements NestInterceptor {
     const error = () => complete(0, 'Response failed before completion.')
     const abort = () => {
       complete(0, 'Response audit lease lost.')
-      response.destroy()
+      if (destroyOnLeaseLoss) response.destroy()
     }
     const complete = (statusCode: number, errorMessage?: string) => {
       if (completed) return
@@ -185,6 +201,20 @@ export class AuditInterceptor implements NestInterceptor {
     lease.signal.addEventListener('abort', abort, { once: true })
     if (lease.signal.aborted) abort()
     return complete
+  }
+
+  private afterPendingWrite(pending: Promise<unknown>, operation: () => Promise<void>, auditLog: AuditLog): void {
+    void pending.then(operation).catch((error) =>
+      this.logger.error({
+        event: 'audit.write.failed',
+        stage: 'pending',
+        auditId: auditLog.id,
+        action: auditLog.action,
+        organizationId: auditLog.organizationId,
+        targetId: auditLog.targetId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
   }
 
   private resolveOrganizationId(auditContext: AuditContext, request: RequestWithUser, result?: any): string | null {
@@ -280,7 +310,15 @@ export class AuditInterceptor implements NestInterceptor {
         AUDIT_WRITE_TIMEOUT_MS,
       )
     } catch (error) {
-      this.logger.error('Failed to record handler result:', error)
+      this.logger.error({
+        event: 'audit.write.failed',
+        stage: 'complete',
+        auditId: auditLog.id,
+        action: auditLog.action,
+        organizationId: auditLog.organizationId,
+        targetId: auditLog.targetId,
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
   }
 
@@ -301,7 +339,15 @@ export class AuditInterceptor implements NestInterceptor {
         AUDIT_WRITE_TIMEOUT_MS,
       )
     } catch (error) {
-      this.logger.error('Failed to record handler error:', error)
+      this.logger.error({
+        event: 'audit.write.failed',
+        stage: 'complete',
+        auditId: auditLog.id,
+        action: auditLog.action,
+        organizationId: auditLog.organizationId,
+        targetId: auditLog.targetId,
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
   }
 

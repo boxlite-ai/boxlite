@@ -41,13 +41,22 @@ import { generateApiKeyValue } from '../../common/utils/api-key'
 import { RunnerFullDto } from '../dto/runner-full.dto'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
-import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
+import {
+  runnerLookupCacheKeyById,
+  runnerProxyTargetCacheKeyById,
+  RUNNER_LOOKUP_CACHE_TTL_MS,
+} from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
 import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
+import { Singleflight } from '../../common/utils/singleflight.util'
+import { copyEntity } from '../../common/utils/entity-copy.util'
+import { TtlLruCache } from '../../common/utils/ttl-lru-cache.util'
 
 /** Disk usage at or above this percentage is logged as critical pressure. */
 const RUNNER_DISK_CRITICAL_THRESHOLD = 90
+
+export type RunnerProxyTarget = Pick<Runner, 'id' | 'apiUrl' | 'proxyUrl' | 'apiKey'>
 
 export class GetRunnerParams {
   regions?: string[]
@@ -62,6 +71,8 @@ export class RunnerService {
   private readonly logger = new Logger(RunnerService.name)
   private readonly serviceStartTime = new Date()
   private readonly scoreConfig: AvailabilityScoreConfig
+  private readonly lookupSingleflight = new Singleflight()
+  private readonly proxyTargetCache = new TtlLruCache<string, RunnerProxyTarget>(10_000, 60_000)
 
   constructor(
     @InjectRepository(Runner)
@@ -206,13 +217,41 @@ export class RunnerService {
 
   @WithInstrumentation('box.runner_lookup')
   async findOne(id: string): Promise<Runner | null> {
-    return this.runnerRepository.findOne({
-      where: { id },
-      cache: {
-        id: runnerLookupCacheKeyById(id),
-        milliseconds: RUNNER_LOOKUP_CACHE_TTL_MS,
-      },
+    const runner = await this.lookupSingleflight.run(runnerLookupCacheKeyById(id), () =>
+      this.runnerRepository.findOne({
+        where: { id },
+        cache: {
+          id: runnerLookupCacheKeyById(id),
+          milliseconds: RUNNER_LOOKUP_CACHE_TTL_MS,
+        },
+      }),
+    )
+    return runner ? copyEntity(runner) : null
+  }
+
+  @WithInstrumentation('box.runner_lookup')
+  async findProxyTarget(id: string): Promise<RunnerProxyTarget | null> {
+    const cached = this.proxyTargetCache.get(id)
+    if (cached) return { ...cached }
+
+    const cacheKey = runnerProxyTargetCacheKeyById(id)
+    const target = await this.lookupSingleflight.run(cacheKey, async () => {
+      const runner = await this.runnerRepository.findOne({
+        where: { id },
+        select: ['id', 'apiUrl', 'proxyUrl', 'apiKey'],
+        cache: { id: cacheKey, milliseconds: 60_000 },
+      })
+      if (!runner) return null
+      const value = {
+        id: runner.id,
+        apiUrl: runner.apiUrl,
+        proxyUrl: runner.proxyUrl,
+        apiKey: runner.apiKey,
+      }
+      this.proxyTargetCache.set(id, value)
+      return value
     })
+    return target ? { ...target } : null
   }
 
   async findOneOrFail(id: string): Promise<Runner> {
@@ -357,6 +396,7 @@ export class RunnerService {
       await this.eventEmitter.emitAsync(RunnerEvents.DELETED, new RunnerDeletedEvent(em, id))
     })
     this.invalidateRunnerCache(id)
+    this.invalidateRunnerProxyTargetCache(id)
   }
 
   async updateRunnerHealth(
@@ -420,11 +460,11 @@ export class RunnerService {
       updateData.domain = domain
     }
 
-    if (apiUrl) {
+    if (apiUrl && apiUrl !== runner.apiUrl) {
       updateData.apiUrl = apiUrl
     }
 
-    if (proxyUrl) {
+    if (proxyUrl && proxyUrl !== runner.proxyUrl) {
       updateData.proxyUrl = proxyUrl
     }
 
@@ -881,6 +921,7 @@ export class RunnerService {
   ): Promise<UpdateResult> {
     const result = await this.runnerRepository.update(id, data)
     this.invalidateRunnerCache(id)
+    if ('apiUrl' in data || 'proxyUrl' in data || 'apiKey' in data) this.invalidateRunnerProxyTargetCache(id)
     return result
   }
 
@@ -890,6 +931,7 @@ export class RunnerService {
   ): Promise<boolean> {
     const result = await this.runnerRepository.update({ id, state: Not(RunnerState.DECOMMISSIONED) }, data)
     this.invalidateRunnerCache(id)
+    if ('apiUrl' in data || 'proxyUrl' in data || 'apiKey' in data) this.invalidateRunnerProxyTargetCache(id)
     return (result.affected ?? 0) > 0
   }
 
@@ -905,6 +947,20 @@ export class RunnerService {
       .catch((error) =>
         this.logger.warn(
           `Failed to invalidate runner lookup cache for ${runnerId}: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      )
+  }
+
+  private invalidateRunnerProxyTargetCache(runnerId: string): void {
+    this.proxyTargetCache.delete(runnerId)
+    const cache = this.dataSource.queryResultCache
+    if (!cache) return
+
+    cache
+      .remove([runnerProxyTargetCacheKeyById(runnerId)])
+      .catch((error) =>
+        this.logger.warn(
+          `Failed to invalidate runner proxy target cache for ${runnerId}: ${error instanceof Error ? error.message : String(error)}`,
         ),
       )
   }

@@ -33,6 +33,7 @@ import { AUDIT_WRITE_TIMEOUT_MS, remainingAuditTime } from '../audit-write-deadl
 
 export interface PendingAuditLease {
   signal: AbortSignal
+  ready: Promise<void>
   complete(result: UpdateAuditLogInternalDto): Promise<void>
 }
 
@@ -75,8 +76,8 @@ export class AuditService implements OnApplicationBootstrap {
   }
 
   @WithInstrumentation('audit.create')
-  async createLog(createDto: CreateAuditLogInternalDto, timeoutMs?: number): Promise<AuditLog> {
-    const auditLog = new AuditLog(createDto)
+  async createLog(createDto: CreateAuditLogInternalDto | AuditLog, timeoutMs?: number): Promise<AuditLog> {
+    const auditLog = createDto instanceof AuditLog ? createDto : new AuditLog(createDto)
 
     await this.writeWithDeadline(timeoutMs, (repository) => repository.insert(auditLog))
     if (auditLog.statusCode !== undefined && this.configService.get('audit.consoleLogEnabled')) {
@@ -127,7 +128,19 @@ export class AuditService implements OnApplicationBootstrap {
   }
 
   @WithInstrumentation('audit.pending_lease')
-  async keepPendingLogAlive(id: string, initialTimeoutMs = AUDIT_WRITE_TIMEOUT_MS): Promise<PendingAuditLease> {
+  async keepPendingLogAlive(
+    id: string,
+    initialTimeoutMs = AUDIT_WRITE_TIMEOUT_MS,
+    pending: Promise<unknown> = Promise.resolve(),
+  ): Promise<PendingAuditLease> {
+    return this.leasePendingLog(id, initialTimeoutMs, pending)
+  }
+
+  leasePendingLog(
+    id: string,
+    initialTimeoutMs = AUDIT_WRITE_TIMEOUT_MS,
+    pending: Promise<unknown> = Promise.resolve(),
+  ): PendingAuditLease {
     const controller = new AbortController()
     const renew = async (initial = false) => {
       await this.writeWithDeadline(initial ? initialTimeoutMs : AUDIT_WRITE_TIMEOUT_MS, async (repository) => {
@@ -140,17 +153,15 @@ export class AuditService implements OnApplicationBootstrap {
         if (rows.length !== 1) throw new Error('Pending audit lease lost')
       })
     }
-    await renew(true)
+
     let stopped = false
     let completion: Promise<void> | undefined
-    let renewal: Promise<void> | undefined
-    let timer: ReturnType<typeof setTimeout>
+    let timer: ReturnType<typeof setTimeout> | undefined
     const schedule = () => {
       timer = setTimeout(() => {
         renewal = renew()
           .catch((error) => {
             stopped = true
-            // Abort listeners may call complete; never await them from this renewal.
             controller.abort(error)
           })
           .finally(() => {
@@ -160,14 +171,28 @@ export class AuditService implements OnApplicationBootstrap {
       }, 60_000)
       timer.unref()
     }
-    schedule()
+
+    let renewal: Promise<void> | undefined = pending.then(() => renew(true))
+    const ready = renewal
+    ready.then(
+      () => {
+        renewal = undefined
+        if (!stopped) schedule()
+      },
+      (error) => {
+        stopped = true
+        controller.abort(error)
+      },
+    )
+
     return {
       signal: controller.signal,
+      ready,
       complete: (result) => {
         if (completion) return completion
         stopped = true
-        clearTimeout(timer)
-        completion = this.completePendingLog(id, result, renewal)
+        if (timer) clearTimeout(timer)
+        completion = ready.then(() => this.completePendingLog(id, result, renewal))
         return completion
       },
     }

@@ -18,6 +18,7 @@ import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import { BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { RunnerProxyAgents } from './runner-proxy-agents'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -34,14 +35,16 @@ function makeHarness(box: Record<string, unknown>) {
   const boxService = {
     findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true, ...box }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
+    assertOrganizationIsNotSuspended: jest.fn(),
   }
-  const runnerService = { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'k' }) }
+  const runnerService = { findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'k' }) }
   const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
   const controller = new BoxliteProxyController(
     boxService as never,
     runnerService as never,
     autoResume as never,
     {} as never,
+    { forTarget: () => ({}) } as never,
   )
   const call = (route: 'configureSsh' | 'enableSsh' | 'getSshStatus' | 'disableSsh') =>
     controller[route](auth, 'my-box', { url: '/ssh' } as never, {} as never, jest.fn())
@@ -307,8 +310,9 @@ async function startSshApp(principal?: Record<string, unknown>): Promise<SshApp>
     controllers: [BoxliteProxyController],
     providers: [
       { provide: BoxService, useValue: { findOneByIdOrName, updateLastActivityAt } },
-      { provide: RunnerService, useValue: { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local' }) } },
+      { provide: RunnerService, useValue: { findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local' }) } },
       { provide: BoxAutoResumeService, useValue: { ensureReady: jest.fn().mockResolvedValue(undefined) } },
+      { provide: RunnerProxyAgents, useValue: { forTarget: () => ({}) } },
       { provide: OrganizationService, useValue: { findOne: async (id: string) => ({ id }) } },
       {
         provide: OrganizationUserService,
@@ -316,7 +320,7 @@ async function startSshApp(principal?: Record<string, unknown>): Promise<SshApp>
           findOne: async (organizationId: string, userId: string) => ({ organizationId, userId, role: 'member' }),
         },
       },
-      { provide: getRedisConnectionToken(), useValue: { get: async () => null, set: async () => 'OK' } },
+      { provide: getRedisConnectionToken(), useValue: { get: async () => null, set: async () => 'OK', eval: async () => 1 } },
     ],
   })
     .useMocker(() => ({}))

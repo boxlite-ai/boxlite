@@ -15,6 +15,8 @@ import {
   BadRequestException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import Redis from 'ioredis'
 import { EntityManager, In, Not, Repository } from 'typeorm'
 import { CreateOrganizationInternalDto } from '../dto/create-organization.internal.dto'
 import { Organization } from '../entities/organization.entity'
@@ -48,6 +50,14 @@ import { OtelConfigDto } from '../dto/otel-config.dto'
 import { boxLookupCacheKeyByAuthToken } from '../../box/utils/box-lookup-cache.util'
 import { BoxRepository } from '../../box/repositories/box.repository'
 import { Domain } from '../../box/entities/domain.entity'
+import { TtlLruCache } from '../../common/utils/ttl-lru-cache.util'
+import { isEnableApiModuleCache } from '../../common/utils/api-module-cache.util'
+import { recordApiModuleCacheAccess } from '../../common/utils/cache-metrics.util'
+import { Singleflight } from '../../common/utils/singleflight.util'
+import {
+  invalidateMembershipAccessCache,
+  invalidateOrganizationAccessCache,
+} from './organization-access-cache.service'
 
 @Injectable()
 export class OrganizationService implements OnModuleInit, TrackableJobExecutions, OnApplicationShutdown {
@@ -57,6 +67,9 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   activeJobs = new Set<string>()
   private readonly logger = new Logger(OrganizationService.name)
   private defaultBoxLimitedNetworkEgress: boolean
+  private readonly nestedVirtualizationCache = new TtlLruCache<string, boolean>(1_000, 60_000)
+  private readonly nestedVirtualizationSingleflight = new Singleflight()
+  @InjectRedis() private readonly redis: Redis
 
   constructor(
     @InjectRepository(Organization)
@@ -119,18 +132,33 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     if (!result.affected) {
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
+    this.nestedVirtualizationCache.delete(organizationId)
   }
 
+  @WithInstrumentation('organization.nested_virtualization')
   async isNestedVirtualizationEnabled(organizationId: string): Promise<boolean> {
-    const organization = await this.organizationRepository.findOne({
-      where: { id: organizationId },
-      select: { id: true, nestedVirtualizationEnabled: true },
-      cache: false,
-    })
-    if (!organization) {
-      throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+    // TODO: 接受管理员修改在所有 API 实例最长 60 秒生效，优先减少热路径查询。
+    const cacheEnabled = isEnableApiModuleCache(this.configService.get('apiModuleCache.enabled'), organizationId)
+    const cached = cacheEnabled ? this.nestedVirtualizationCache.get(organizationId) : undefined
+    if (cached !== undefined) {
+      recordApiModuleCacheAccess('nested_virtualization', 'hit')
+      return cached
     }
-    return organization.nestedVirtualizationEnabled === true
+    recordApiModuleCacheAccess('nested_virtualization', cacheEnabled ? 'miss' : 'bypass')
+
+    return this.nestedVirtualizationSingleflight.run(organizationId, async () => {
+      const organization = await this.organizationRepository.findOne({
+        where: { id: organizationId },
+        select: { id: true, nestedVirtualizationEnabled: true },
+        cache: false,
+      })
+      if (!organization) {
+        throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+      }
+      const enabled = organization.nestedVirtualizationEnabled === true
+      if (cacheEnabled) this.nestedVirtualizationCache.set(organizationId, enabled)
+      return enabled
+    })
   }
 
   async findByIds(organizationIds: string[]): Promise<Organization[]> {
@@ -201,7 +229,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
 
-    return this.removeWithEntityManager(this.organizationRepository.manager, organization)
+    await this.removeWithEntityManager(this.organizationRepository.manager, organization)
+    await invalidateOrganizationAccessCache(this.redis, organizationId)
   }
 
   async updateName(organizationId: string, name: string): Promise<Organization> {
@@ -238,6 +267,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       suspendedAt: new Date(),
       ...(suspensionCleanupGracePeriodHours ? { suspensionCleanupGracePeriodHours } : {}),
     })
+    await invalidateOrganizationAccessCache(this.redis, organizationId)
   }
 
   /**
@@ -268,6 +298,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       suspendedUntil: null,
       suspendedAt: null,
     })
+    await invalidateOrganizationAccessCache(this.redis, organizationId)
   }
 
   async updateBoxDefaultLimitedNetworkEgress(
@@ -502,7 +533,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     })
   }
 
-  private async unsuspendDefaultForUserWithEntityManager(entityManager: EntityManager, userId: string): Promise<void> {
+  private async unsuspendDefaultForUserWithEntityManager(
+    entityManager: EntityManager,
+    userId: string,
+  ): Promise<Organization | null> {
     const organization = await this.findDefaultForUserWithEntityManager(entityManager, userId)
 
     // Email verification owns only the suspension it created. Billing, abuse,
@@ -512,7 +546,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       !organization.suspended ||
       organization.suspensionReason !== OrganizationService.EMAIL_VERIFICATION_SUSPENSION_REASON
     ) {
-      return
+      return null
     }
 
     await entityManager.save(Organization, {
@@ -522,6 +556,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       suspensionReason: null,
       suspendedUntil: null,
     })
+    return organization
   }
 
   private async findDefaultForUserWithEntityManager(
@@ -637,7 +672,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   })
   @TrackJobExecution()
   async handleUserEmailVerifiedEvent(payload: UserEmailVerifiedEvent): Promise<void> {
-    await this.unsuspendDefaultForUserWithEntityManager(payload.entityManager, payload.userId)
+    const organization = await this.unsuspendDefaultForUserWithEntityManager(payload.entityManager, payload.userId)
+    if (organization) {
+      payload.afterCommit(() => invalidateOrganizationAccessCache(this.redis, organization.id))
+    }
   }
 
   @OnAsyncEvent({
@@ -658,6 +696,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
     if (membersCount <= 1) {
       await this.removeWithEntityManager(payload.entityManager, organization, true)
+      payload.afterCommit(() => invalidateOrganizationAccessCache(this.redis, organization.id))
       return
     }
 
@@ -695,6 +734,9 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
         if (fallbackOwner) {
           fallbackOwner.role = OrganizationMemberRole.OWNER
           await payload.entityManager.save(fallbackOwner)
+          payload.afterCommit(() =>
+            invalidateMembershipAccessCache(this.redis, fallbackOwner.organizationId, fallbackOwner.userId),
+          )
         }
       }
     }

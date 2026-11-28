@@ -22,6 +22,9 @@ import { v4 } from 'uuid'
 @Index(['runnerId', 'status'])
 @Index(['status', 'createdAt'])
 @Index(['resourceType', 'resourceId'])
+@Index('idx_job_runner_status_created_at', ['runnerId', 'status', 'createdAt'])
+@Index('idx_job_in_progress_updated_at', ['updatedAt'], { where: `"status" = 'IN_PROGRESS'` })
+@Index('idx_job_resource_created_at', ['resourceType', 'resourceId', 'createdAt'])
 @Index('IDX_UNIQUE_INCOMPLETE_JOB', ['resourceType', 'resourceId', 'runnerId'], {
   unique: true,
   where: `"completedAt" IS NULL`,

@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { DataSource, Repository } from 'typeorm'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
-import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
+import { JobDto, JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { Job } from '../entities/job.entity'
 import { JobService } from './job.service'
 
@@ -18,7 +18,7 @@ const rejectedJobId = '00000000-0000-4000-8000-000000000003'
 const rejectConstraint = 'reject_one_in_progress_job'
 
 function claimPendingJobs(service: JobService, runnerId: string, limit: number) {
-  return (service as any).claimPendingJobs(runnerId, limit) as Promise<Array<{ id: string; status: JobStatus }>>
+  return (service as any).claimPendingJobs(runnerId, limit) as Promise<JobDto[]>
 }
 
 function pendingJob(id: string, resourceId: string, createdAt: Date): Job {
@@ -52,6 +52,7 @@ describeIfDatabase('JobService.claimPendingJobs (integration, real Postgres)', (
       entities: [Job],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
+      extra: { options: `-c search_path=${schemaName},public` },
       synchronize: false,
     }).initialize()
 
@@ -94,6 +95,37 @@ describeIfDatabase('JobService.claimPendingJobs (integration, real Postgres)', (
     expect(await repository.findOneByOrFail({ id: firstJobId })).toEqual(
       expect.objectContaining({ status: JobStatus.IN_PROGRESS, startedAt: expect.any(Date) }),
     )
+  })
+
+  it('increments the version and returns jobs in deterministic creation order', async () => {
+    const createdAt = new Date('2026-08-10T10:00:00.000Z')
+    await repository.insert([
+      pendingJob(secondJobId, 'box-second', createdAt),
+      pendingJob(firstJobId, 'box-first', createdAt),
+    ])
+
+    const claimed = await claimPendingJobs(service, 'runner-claim-integration', 2)
+
+    expect(claimed.map((job) => job.id)).toEqual([firstJobId, secondJobId])
+    expect((await repository.findOneByOrFail({ id: firstJobId })).version).toBe(2)
+    expect(claimed[0].createdAt).toBe(createdAt.toISOString())
+  })
+
+  it('does not hand the same job to concurrent polls', async () => {
+    const createdAt = new Date('2026-08-10T10:00:00.000Z')
+    await repository.insert([
+      pendingJob(firstJobId, 'box-first', createdAt),
+      pendingJob(secondJobId, 'box-second', new Date(createdAt.getTime() + 1)),
+      pendingJob(rejectedJobId, 'box-third', new Date(createdAt.getTime() + 2)),
+    ])
+
+    const batches = await Promise.all(
+      Array.from({ length: 5 }, () => claimPendingJobs(service, 'runner-claim-integration', 2)),
+    )
+    const ids = batches.flat().map((job) => job.id)
+
+    expect(ids).toHaveLength(3)
+    expect(new Set(ids).size).toBe(3)
   })
 
   it('leaves the whole selected batch pending when one claim update is rejected', async () => {
