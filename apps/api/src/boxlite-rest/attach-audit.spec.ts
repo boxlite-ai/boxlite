@@ -13,6 +13,7 @@ import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { AuditService } from '../audit/services/audit.service'
 import { AuditLog } from '../audit/entities/audit-log.entity'
 import { AuditAction } from '../audit/enums/audit-action.enum'
+import { RunnerProxyAgents } from './runner-proxy-agents'
 
 // Keep the installed proxy's actual upgrade and error handling.
 jest.mock('http-proxy-middleware', () =>
@@ -40,6 +41,7 @@ describe('attach audit over real WebSocket connections', () => {
   let refusal: number | 'reset' | 'hold' | undefined
   let authorized: boolean
   let base: string
+  let proxyAgents: RunnerProxyAgents
 
   const snapshot = (row: AuditLog): AuditLog => ({ ...row, metadata: { ...row.metadata } })
   const attached = () => [...rows.values()].filter((row) => row.action === 'attach')
@@ -70,19 +72,21 @@ describe('attach audit over real WebSocket connections', () => {
     downstream = []
     refusal = undefined
     authorized = true
+    const currentRows = rows
+    const currentChanged = changed
     const repo = {
       insert: async (row: AuditLog) => {
-        rows.set(row.id, snapshot(row))
-        changed.emit('change')
+        currentRows.set(row.id, snapshot(row))
+        currentChanged.emit('change')
       },
       findOne: async ({ where }: { where: { id: string } }) => {
-        const row = rows.get(where.id)
+        const row = currentRows.get(where.id)
         if (!row) throw new Error('Audit row not found')
         return snapshot(row)
       },
       save: async (row: AuditLog) => {
-        rows.set(row.id, snapshot(row))
-        changed.emit('change')
+        currentRows.set(row.id, snapshot(row))
+        currentChanged.emit('change')
         return row
       },
     }
@@ -117,10 +121,12 @@ describe('attach audit over real WebSocket connections', () => {
     })
     await new Promise<void>((resolve) => runner.listen(0, '127.0.0.1', resolve))
     runnerConfig = { apiUrl: `http://127.0.0.1:${(runner.address() as AddressInfo).port}`, apiKey: 'runner-secret' }
+    proxyAgents = new RunnerProxyAgents()
     const service = new BoxliteWsProxyService(
       {
-        getApiKeyByValue: async (value: string) =>
+        findApiKey: async (value: string) =>
           value === 'key-secret' ? { userId: 'key-user', organizationId: 'org-1', permissions: ['write:boxes'] } : null,
+        findUser: async (id: string) => ({ userId: id, email: `${id}@example.test`, role: 'user' }),
       } as never,
       { findOne: async () => (authorized ? { role: 'owner' } : null) } as never,
       { findOne: async () => ({ id: 'org-1' }) } as never,
@@ -130,7 +136,6 @@ describe('attach audit over real WebSocket connections', () => {
       } as never,
       { findProxyTarget: async () => runnerConfig } as never,
       {} as never,
-      { findOne: async (id: string) => ({ id, email: `${id}@example.test`, role: 'user' }) } as never,
       { verifyToken: async () => ({ sub: 'jwt-user' }) } as never,
       {
         consume: async () => ({
@@ -141,7 +146,9 @@ describe('attach audit over real WebSocket connections', () => {
         }),
       } as never,
       audit,
+      proxyAgents,
     )
+    Object.assign(service, { redis: { get: async () => null, eval: async () => 1 } })
     frontend = createServer()
     frontend.on('upgrade', (req, socket, head) => {
       downstream.push(socket as Socket)
@@ -161,6 +168,7 @@ describe('attach audit over real WebSocket connections', () => {
     for (const client of clients) client.terminate()
     for (const ws of runnerWs.clients) ws.terminate()
     for (const socket of sockets) socket.destroy()
+    proxyAgents.onModuleDestroy()
     await Promise.all([frontend, runner].map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
     runnerWs.close()
   })
@@ -235,12 +243,15 @@ describe('attach audit over real WebSocket connections', () => {
     },
   )
 
-  it('refuses forwarding when the initial audit insert fails', async () => {
+  it('continues forwarding when the initial audit insert fails', async () => {
     jest.spyOn(audit, 'createLog').mockRejectedValueOnce(new Error('database-secret'))
     const client = openClient()
-    await closed(client)
-    expect(upgrades).toHaveLength(0)
+    await once(client, 'open')
+    expect(upgrades).toHaveLength(1)
     expect(rows.size).toBe(0)
+    const echo = once(client, 'message')
+    client.send('still-connected')
+    expect((await echo)[0].toString()).toBe('still-connected')
   })
 
   it.each(['key', 'jwt', 'ticket'])('denies a %s without membership before auditing or forwarding', async (mode) => {
@@ -260,7 +271,7 @@ describe('attach audit over real WebSocket connections', () => {
     expect(detached()).toHaveLength(0)
   })
 
-  it('does not forward a client that disconnects while insertion is pending', async () => {
+  it('forwards the upgrade while the initial audit insertion is pending', async () => {
     const inserted = deferred()
     const release = deferred()
     const create = audit.createLog.bind(audit)
@@ -271,30 +282,58 @@ describe('attach audit over real WebSocket connections', () => {
     })
     const client = openClient()
     await inserted.promise
-    const done = once(downstream[0], 'close')
+    await until(() => upgrades.length === 1)
+
+    expect(upgrades).toHaveLength(1)
+    release.resolve()
+    await once(client, 'open')
+    await until(() => attached()[0]?.statusCode === 101)
+  })
+
+  it('cleans up an early client close while insertion is pending without losing completion order', async () => {
+    refusal = 'hold'
+    const inserted = deferred()
+    const release = deferred()
+    const create = audit.createLog.bind(audit)
+    jest.spyOn(audit, 'createLog').mockImplementationOnce(async (dto) => {
+      inserted.resolve()
+      await release.promise
+      return create(dto)
+    })
+    const client = openClient()
+    await inserted.promise
+    await until(() => upgrades.length === 1)
+    const done = new Promise<void>((resolve) => downstream[0].once('close', () => resolve()))
     client.terminate()
     await done
+    expect(attached()).toHaveLength(0)
     release.resolve()
-    await until(() => attached()[0]?.statusCode === 0)
-    expect(upgrades).toHaveLength(0)
+    for (let attempt = 0; attached()[0]?.statusCode !== 0 && attempt < 10; attempt++) {
+      await new Promise(setImmediate)
+    }
+    expect(attached()[0]?.statusCode).toBe(0)
     expect(detached()).toHaveLength(0)
   })
 
-  it('records an immediate detach without waiting for attach persistence', async () => {
+  it('serializes detach after a delayed attach completion', async () => {
     const release = deferred()
+    const completing = deferred()
     const update = audit.updateLog.bind(audit)
     jest.spyOn(audit, 'updateLog').mockImplementationOnce(async (id, dto) => {
+      completing.resolve()
       await release.promise
       return update(id, dto)
     })
     const client = openClient()
     await once(client, 'open')
     client.close()
-    await until(() => detached().length === 1)
+    await completing.promise
+    expect(detached()).toHaveLength(0)
     expect(attached()[0].statusCode).toBeUndefined()
-    expect(detached()[0].metadata?.connectedAt).toEqual(expect.any(String))
     release.resolve()
-    await until(() => attached()[0].statusCode === 101)
+    await until(() => detached().length === 1)
+    expect(attached()[0].statusCode).toBe(101)
+    expect(detached()[0].metadata?.connectedAt).toEqual(expect.any(String))
     expect(attached()[0].metadata?.connectedAt).toBe(detached()[0].metadata?.connectedAt)
   })
 

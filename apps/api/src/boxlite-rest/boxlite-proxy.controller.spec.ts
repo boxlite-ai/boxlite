@@ -51,6 +51,7 @@ function makeHarness() {
     runnerService,
     autoResume,
     tunnelService,
+    { forTarget: () => ({}) },
   ) as BoxliteProxyController
   return { controller, boxService, runnerService, autoResume, tunnelService }
 }

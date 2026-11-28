@@ -18,6 +18,7 @@ import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import { BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { RunnerProxyAgents } from './runner-proxy-agents'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -43,6 +44,7 @@ function makeHarness(box: Record<string, unknown>) {
     runnerService as never,
     autoResume as never,
     {} as never,
+    { forTarget: () => ({}) } as never,
   )
   const call = (route: 'configureSsh' | 'enableSsh' | 'getSshStatus' | 'disableSsh') =>
     controller[route](auth, 'my-box', { url: '/ssh' } as never, {} as never, jest.fn())
@@ -310,6 +312,7 @@ async function startSshApp(principal?: Record<string, unknown>): Promise<SshApp>
       { provide: BoxService, useValue: { findOneByIdOrName, updateLastActivityAt } },
       { provide: RunnerService, useValue: { findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local' }) } },
       { provide: BoxAutoResumeService, useValue: { ensureReady: jest.fn().mockResolvedValue(undefined) } },
+      { provide: RunnerProxyAgents, useValue: { forTarget: () => ({}) } },
       { provide: OrganizationService, useValue: { findOne: async (id: string) => ({ id }) } },
       {
         provide: OrganizationUserService,

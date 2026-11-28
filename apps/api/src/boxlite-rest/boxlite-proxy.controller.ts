@@ -50,6 +50,7 @@ import { reportedBoxState } from '../box/utils/box-state.util'
 import { Box } from '../box/entities/box.entity'
 import { TunnelService } from '../box/services/tunnel.service'
 import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
+import { RunnerProxyAgents } from './runner-proxy-agents'
 import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
@@ -126,6 +127,7 @@ export class BoxliteProxyController {
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
     private readonly tunnelService: TunnelService,
+    private readonly proxyAgents: RunnerProxyAgents,
   ) {}
 
   @All(':boxId/exec')
@@ -596,13 +598,20 @@ export class BoxliteProxyController {
     }
 
     const proxyContext = context.active()
+    const protocol = targetUrl.toLowerCase().startsWith('https:') ? 'https' : 'http'
     const spanAttributes = {
       component: BoxliteProxyController.name,
       method: 'proxyToRunner',
       box_id: box.id,
+      'runner.protocol': protocol,
       ...(typeof req.params?.execId === 'string' ? { execution_id: req.params.execId } : {}),
     }
-    const metricAttributes = { component: BoxliteProxyController.name, method: 'proxyToRunner' }
+    const metricAttributes: Record<string, string> = {
+      component: BoxliteProxyController.name,
+      method: 'proxyToRunner',
+      protocol,
+      reused_socket: 'unknown',
+    }
     let upstream: TimedOperation | undefined
     let ttfb: TimedOperation | undefined
     const finishUpstream = (status: 'success' | 'error' | 'timeout', error?: unknown) => {
@@ -612,6 +621,7 @@ export class BoxliteProxyController {
 
     const proxyOptions: Options = {
       target: targetUrl,
+      agent: this.proxyAgents.forTarget(targetUrl),
       secure: false,
       changeOrigin: true,
       autoRewrite: true,
@@ -622,6 +632,14 @@ export class BoxliteProxyController {
         proxyReq: (proxyReq: any, originalReq: any) => {
           upstream = startTimedOperation('box.runner_proxy_upstream', spanAttributes, metricAttributes, proxyContext)
           ttfb = startTimedOperation('box.runner_proxy_ttfb', spanAttributes, metricAttributes, proxyContext)
+          const recordSocket = () => {
+            const reused = proxyReq.reusedSocket === true
+            metricAttributes.reused_socket = String(reused)
+            upstream?.setAttributes({ 'runner.reused_socket': reused })
+            ttfb?.setAttributes({ 'runner.reused_socket': reused })
+          }
+          proxyReq.once('socket', recordSocket)
+          if (proxyReq.socket) recordSocket()
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           propagation.inject(upstream.ctx, {}, { set: (_carrier, key, value) => proxyReq.setHeader(key, value) })
           proxyReq.once('timeout', () => finishUpstream('timeout', new Error('upstream request timed out')))

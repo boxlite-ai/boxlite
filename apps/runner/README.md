@@ -96,8 +96,8 @@ If you want the formal API schema, see
 │                              CLIENT SIDE                                  │
 │                                                                          │
 │   Python / Node / Rust SDKs            NestJS API (control plane)        │
-│   • interactive boxes                  • issues jobs to runner via       │
-│   • /attach WebSockets                   v2 long-poll                    │
+│   • interactive boxes                  • issues jobs by v2 poll/direct │
+│   • /attach WebSockets                   and the direct-create POC       │
 │   • file I/O, artifact ops, metrics    • collects healthchecks          │
 └─────────────────────┬───────────────────────────────────┬────────────────┘
                       │                                   │
@@ -900,9 +900,12 @@ After the handler returns, `updateJobStatus` reports `COMPLETED` or
 extracted from the job's `traceContext` map so the runner's spans chain
 under the API-side trace.
 
+A v2 Runner also declares `direct-create-v1`. When the API's global direct-create POC is enabled, it can send a fresh IN_PROGRESS CREATE_BOX Job to the authenticated internal `POST /internal/jobs/:jobId/direct-create` route. The route accepts only CREATE_BOX whose body ID matches the path, atomically registers the job ID, and returns 202 without waiting for native Create or Start. Execution uses the same Executor, per-Box lock, payload decoding, trace extraction, and terminal HTTP callback as polled work. The accepted context is detached from request cancellation with `context.WithoutCancel`, so returning 202 does not cancel preparation.
+
+The direct job cache defaults to a 300-second TTL and 1,024 entries. It is atomic for concurrent registrations, never expires running work, and evicts completed entries under TTL/capacity pressure. A running duplicate does not execute again. A completed duplicate whose callback was confirmed does nothing; if confirmation failed, it retries only the saved status/result/error callback. Cache entries do not retain the Job or its secret payload. Capacity with no evictable completed entry rejects new direct work with 503. This is process-local duplicate suppression, not persistent execution storage: after a restart, the existing IN_PROGRESS ListJobs replay and runtime GetOrCreate remain the recovery mechanism. The PENDING poller and startup replay still call the ordinary Executor entry point and are not claimed through this cache.
+
 This is the production path. The HTTP routes under `/boxes/` and
-`/artifacts/` exist for direct/SDK use; v2 turns those into pull-based
-job execution.
+`/artifacts/` exist for direct/SDK use; v2 executes their work through jobs.
 
 ### Portable archive storage
 
@@ -1031,6 +1034,7 @@ the Swagger UI (development only).
 | --- | --- | --- |
 | `GET` | `/` | Health check (public) |
 | `GET` | `/info` | Runner metrics + service health |
+| `POST` | `/internal/jobs/:jobId/direct-create` | Register an IN_PROGRESS CREATE_BOX; return 202 before native execution |
 | `GET` | `/metrics` | Prometheus scrape |
 | `POST` | `/boxes` | Create box |
 | `GET` | `/boxes/:id` | Box info (state + backup state + runtime version) |

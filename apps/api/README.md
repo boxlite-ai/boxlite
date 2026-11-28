@@ -1270,6 +1270,16 @@ coverage. To test real compatible/new Go decoders, install Go 1.23+ and set
 `COMPAT_API_CLIENT_ROOT` to an exported compatibility-release `apps/libs/api-client-go`
 directory. Decoder tests consume unmodified responses from the current Box producer.
 
+## Direct CREATE_BOX dispatch POC
+
+`RUNNER_DIRECT_CREATE_ENABLED=true` enables the global direct-create POC for new jobs. It defaults to false and has no organization override. Only an ordinary fresh CREATE_BOX assigned to a READY v2 Runner whose latest scheduling record declares `direct-create-v1` and has an `apiUrl` uses direct dispatch. Other job types, checkpoint recovery, unsupported Runners, and disabled configurations retain PENDING insertion, Redis notification, and long-poll claiming.
+
+The API inserts the Job once as IN_PROGRESS with its start/update timestamps, then sends the same local Job DTO to `POST <runner-api-url>/internal/jobs/<jobId>/direct-create` using the Runner's Bearer API key. The request carries payload and W3C `traceContext`; secret-bearing dispatch occurs only after the credential/Job transaction commits and releases the Box lock. No Job is re-read or claimed, and no Redis notification is emitted. The Runner returns 202 after registration only; it does not return native Create/Start output or an execution ACK. Executor completion still uses the existing job-status HTTP callback, BoxStateWaiter, and JobStateHandler.
+
+The direct POST is not retried by the API. A timeout, disconnect, non-202 response, or 5xx raises a dispatch error and leaves the Job IN_PROGRESS: this POC does not reset it to PENDING, LPUSH a queue fallback, or let the old pending-only poller claim it. Existing create waiting/reconciliation therefore bounds an unaccepted dispatch. A running Runner deduplicates retries by job ID and can repeat an unconfirmed saved terminal callback without repeating native Create. Its cache is process-local, bounded, and expires completed entries; a Runner restart instead relies on the existing IN_PROGRESS ListJobs replay and runtime GetOrCreate. Disabling the switch affects only new Jobs, not accepted work.
+
+Run the focused checks with `make test:apps:api TEST_FILES='direct-create|credential-lifecycle'`; supply the usual loopback `DB_*` settings for the real PostgreSQL/HTTP commit-boundary coverage.
+
 ## Hot-path I/O and consistency controls
 
 `ENABLE_API_MODULE_CACHE` controls the organization nested-virtualization and region metadata
@@ -1304,6 +1314,28 @@ removed from the in-flight map and failures are not memoized, so later requests 
 Runner and Region callers receive independent entity objects rather than a shared mutable ORM
 instance. Cache hits do not require singleflight and multiple API instances can still each
 perform one backfill.
+
+WebSocket attach reads API keys and users through `ApiKeyStrategy`'s read-only lookup methods,
+including key-bound ticket lookup by hash. Misses backfill the same Redis entries and TTLs as
+ordinary HTTP authentication, but attach does not update `lastUsedAt` or try Runner/Region
+credentials. Organization and membership reads use `OrganizationAccessCache`, including its
+10/60-second TTLs, singleflight, explicit invalidation and generation check that prevents an
+in-flight stale load from overwriting invalidation. Membership and organization reads are
+independent and run concurrently. JWT verification, ticket GETDEL consumption and binding,
+expiry, administrator/owner exceptions, `write:boxes`, and organization isolation are unchanged.
+
+`BoxliteProxyController` and WebSocket attach share one `RunnerProxyAgents` provider per API
+process, containing one HTTP and one HTTPS Agent for Runner forwarding only. Each protocol is
+capped at 512 total sockets (1,024 combined), with at most 64 sockets and 16 free sockets per
+Runner origin. These counts include active file transfers, streaming exec and upgraded
+WebSockets; an upgraded socket is detached from the free pool for its lifetime. Only free
+sockets are destroyed after 45 seconds idle, rather than using an Agent activity timeout.
+Reassignment clears that socket's idle timer, and module shutdown clears all pending timers and
+destroys the pools. Runner WS handshakes have a separate absolute 10-second deadline; established
+WebSockets have no such deadline. Proxying does not automatically retry non-idempotent POSTs.
+Existing proxy spans and duration metrics carry `runner.protocol`/`protocol` and
+`runner.reused_socket`/`reused_socket` from the actual socket-allocation event, together with
+the existing outcome, so new and reused connections can be compared without recording credentials.
 
 Box organization lookups use a 10,000-entry, 120-second positive-result LRU in each API process.
 ID and name entries are separate, and name keys include the organization ID. Missing Boxes are
@@ -1426,9 +1458,12 @@ MCP calls inherit the target REST operation's audit without a second MCP record.
 Attach-ticket metadata accepts only string execution IDs; invalid objects and arrays
 are excluded before request validation runs.
 
-WebSocket attach upgrades create a pending `attach` row after authorization and
-Box/Runner resolution, before forwarding. An insert failure refuses the connection.
-Runner acceptance completes it with `101`, without waiting for disconnect; this
+WebSocket attach upgrades start a pending `attach` insert after authorization and
+Box/Runner resolution without waiting for it before forwarding. An insert failure or
+timeout is logged and does not refuse or interrupt the connection, so it can leave no
+attach row. Each session serializes its initial insert, completion and detach writes;
+a fast Runner response or client close is queued until the insert has returned its log
+ID. Runner acceptance completes the row with `101`, without waiting for disconnect; this
 observes the upstream handshake, not proof of client receipt. A refused handshake
 records the upstream HTTP status; failure or an observed disconnect before acceptance
 records unknown (`0`) and produces no `detach`.
@@ -1451,8 +1486,9 @@ API Key, JWT and one-time ticket authentication share this lifecycle and retain 
 existing authorization policy. Completed detach inserts also honor `audit.consoleLogEnabled`.
 
 Each attach audit write has a five-second deadline, including pool acquisition and
-transaction cleanup. A timeout refuses an initial upgrade or emits a diagnostic for
-completion/detach. Active database connections are closed on expiry; transaction-local
+transaction cleanup. A timeout emits a diagnostic for the initial insert, completion or
+detach without changing the established connection; an initial timeout does not block the
+upgrade. Active database connections are closed on expiry; transaction-local
 SQL timeouts use the budget remaining after acquisition and transaction start, with a
 lock wait capped at one second. A timed-out commit can have an uncertain result and
 is not retried. Completion logs are emitted only after a successful commit.

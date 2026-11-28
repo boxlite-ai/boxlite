@@ -34,8 +34,8 @@ func TestHealthcheckCapabilitiesWireContract(t *testing.T) {
 	}
 	payload := <-payloads
 	got, present := payload["capabilities"].([]any)
-	if !present || len(got) != 1 || got[0] != "filestore" {
-		t.Fatalf("capabilities = %v (present=%t), want [filestore]; body = %v", got, present, payload)
+	if !present || len(got) != 2 || got[0] != "filestore" || got[1] != "direct-create-v1" {
+		t.Fatalf("capabilities = %v (present=%t), want [filestore direct-create-v1]; body = %v", got, present, payload)
 	}
 }
 

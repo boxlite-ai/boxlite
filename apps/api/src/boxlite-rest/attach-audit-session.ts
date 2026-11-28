@@ -14,6 +14,7 @@ import { AuditTarget } from '../audit/enums/audit-target.enum'
 
 const WRITE_TIMEOUT_MS = 5000
 const logger = new Logger('AttachAuditSession')
+const reportCreateFailure = () => logger.warn('Failed to create attach audit')
 const reportCompletionFailure = () => logger.warn('Failed to complete attach audit')
 const reportDisconnectFailure = () => logger.warn('Failed to persist attach disconnect audit')
 
@@ -30,6 +31,7 @@ export class AttachAuditSession {
   private closed = false
   private completed = false
   private hadError = false
+  private writes: Promise<void> = Promise.resolve()
 
   private constructor(
     private readonly audit: AuditService,
@@ -44,14 +46,14 @@ export class AttachAuditSession {
     client.on('error', this.onError)
   }
 
-  static async start(
+  static start(
     audit: AuditService,
     client: Socket,
     identity: AttachIdentity,
     executionId: string,
-  ): Promise<AttachAuditSession | undefined> {
+  ): AttachAuditSession | undefined {
     const session = new AttachAuditSession(audit, client, identity, executionId)
-    try {
+    session.enqueueWrite(reportCreateFailure, async () => {
       const log = await audit.createLog(
         {
           ...identity,
@@ -63,17 +65,17 @@ export class AttachAuditSession {
         WRITE_TIMEOUT_MS,
       )
       session.logId = log.id
-    } catch (error) {
-      session.cleanup()
-      throw error
-    }
+    })
     if (session.closed || client.destroyed || client.readableEnded) {
       client.destroy()
       session.onClose()
-      session.completeAttach(0)
       return undefined
     }
     return session
+  }
+
+  private enqueueWrite(reportFailure: () => void, write: () => Promise<void>): void {
+    this.writes = this.writes.then(write).catch(reportFailure)
   }
 
   bind(request: ClientRequest): void {
@@ -134,8 +136,11 @@ export class AttachAuditSession {
       this.completeAttach(0)
       return
     }
-    void this.audit
-      .createLog(
+    const connected = this.connected
+    const disconnectedAt = new Date().toISOString()
+    const durationMs = Math.max(0, Math.round(performance.now() - connected.started))
+    this.enqueueWrite(reportDisconnectFailure, async () => {
+      await this.audit.createLog(
         {
           ...this.identity,
           action: AuditAction.DETACH,
@@ -145,30 +150,29 @@ export class AttachAuditSession {
           statusCode: 200,
           metadata: {
             ...this.metadata,
-            connectedAt: this.connected.at,
-            disconnectedAt: new Date().toISOString(),
-            durationMs: Math.max(0, Math.round(performance.now() - this.connected.started)),
+            connectedAt: connected.at,
+            disconnectedAt,
+            durationMs,
             hadError: this.hadError,
           },
         },
         WRITE_TIMEOUT_MS,
       )
-      .catch(reportDisconnectFailure)
+    })
   }
 
   private completeAttach(statusCode: number): void {
-    if (this.completed || !this.logId) return
+    if (this.completed) return
     this.completed = true
-    void this.audit
-      .updateLog(
+    const connectedAt = this.connected?.at
+    this.enqueueWrite(reportCompletionFailure, async () => {
+      if (!this.logId) return
+      await this.audit.updateLog(
         this.logId,
-        {
-          statusCode,
-          ...(this.connected ? { metadata: { connectedAt: this.connected.at } } : {}),
-        },
+        { statusCode, ...(connectedAt ? { metadata: { connectedAt } } : {}) },
         WRITE_TIMEOUT_MS,
       )
-      .catch(reportCompletionFailure)
+    })
   }
 
   private removeRequestListeners(): void {
