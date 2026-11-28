@@ -36,6 +36,7 @@ import { OutboundPolicy } from '../runner-adapter/network-policy'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { TypedConfigService } from '../../config/typed-config.service'
 import type { BoxCreationQuotaService } from '../services/box-creation-quota.service'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
 // acquire a lock.
@@ -167,6 +168,7 @@ export class BoxRepository extends BaseRepository<Box> {
     super(dataSource, eventEmitter, Box)
   }
 
+  @WithInstrumentation('box.repository_insert')
   async insert(
     box: Box,
     maxCreatedBoxes?: number,
@@ -185,6 +187,7 @@ export class BoxRepository extends BaseRepository<Box> {
     box.assertValid()
     box.enforceInvariants()
 
+    const combinedInsert = onPersist === undefined && initialize === undefined && afterInsert === undefined
     await this.withCreationAdmission(
       box.organizationId,
       box.id,
@@ -194,13 +197,18 @@ export class BoxRepository extends BaseRepository<Box> {
         // initialization before insertion so checkpoint use can hold its row lock.
         await initialize?.(entityManager)
         await this.lockRegistryCredential(box, entityManager)
-        await entityManager.insert(Box, box)
+        if (combinedInsert) {
+          await this.insertBoxWithActivity(entityManager, box)
+        } else {
+          await entityManager.insert(Box, box)
+        }
         // Resource ownership and admission must commit with the Box itself.
         await onPersist?.(entityManager, box)
         await afterInsert?.(entityManager)
-        await this.upsertLastActivity(entityManager, box.id, box.createdAt)
+        if (!combinedInsert) await this.upsertLastActivity(entityManager, box.id, box.createdAt)
       },
-      onPersist === undefined && initialize === undefined && afterInsert === undefined,
+      combinedInsert,
+      combinedInsert && !this.requiresRegistryCredentialLock(box),
     )
     if (maxCreatedBoxes === undefined && this.creationQuota?.enabled) {
       void this.creationQuota.trackCommitted(box.organizationId, box.id)
@@ -212,9 +220,14 @@ export class BoxRepository extends BaseRepository<Box> {
     return box
   }
 
+  private requiresRegistryCredentialLock(box: Box): boolean {
+    const proxy = registryProxyHost()
+    return !!proxy && !!box.image?.startsWith(`${proxy}/${box.organizationId}/`)
+  }
+
   private async lockRegistryCredential(box: Box, manager: EntityManager): Promise<void> {
     const proxy = registryProxyHost()
-    if (!proxy || !box.image?.startsWith(`${proxy}/${box.organizationId}/`)) return
+    if (!this.requiresRegistryCredentialLock(box)) return
 
     const { host, repository } = parseImageRef(upstreamRefOf(box.image))
     try {
@@ -237,6 +250,23 @@ export class BoxRepository extends BaseRepository<Box> {
       }
       throw error
     }
+  }
+
+  private async insertBoxWithActivity(entityManager: EntityManager, box: Box): Promise<void> {
+    const [insert, parameters] = await entityManager
+      .createQueryBuilder()
+      .insert()
+      .into(Box)
+      .values(box)
+      .returning(['id', 'createdAt'])
+      .getQueryAndParameters()
+    await entityManager.query(
+      `WITH inserted_box AS (${insert})
+       INSERT INTO box_last_activity ("boxId", "lastActivityAt")
+       SELECT id, "createdAt" FROM inserted_box
+       ON CONFLICT ("boxId") DO UPDATE SET "lastActivityAt"=EXCLUDED."lastActivityAt"`,
+      parameters,
+    )
   }
 
   /**
@@ -324,9 +354,10 @@ export class BoxRepository extends BaseRepository<Box> {
     maxCreatedBoxes: number | undefined,
     persist: (entityManager: EntityManager) => Promise<void>,
     singleInsertWithoutCallbacks = false,
+    withoutTransaction = false,
   ): Promise<void> {
     if (maxCreatedBoxes === undefined) {
-      return this.dataSource.transaction(persist)
+      return withoutTransaction ? persist(this.dataSource.manager) : this.dataSource.transaction(persist)
     }
     if (this.creationQuota?.enabled) {
       return this.creationQuota.run(organizationId, boxId, maxCreatedBoxes, persist)

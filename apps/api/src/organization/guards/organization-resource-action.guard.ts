@@ -24,6 +24,7 @@ import {
   OrganizationResourcePermission,
 } from '../enums/organization-resource-permission.enum'
 import { CURRENT_ORGANIZATION_PERMISSIONS } from '../decorators/current-organization-permissions.decorator'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 // Machine identities carry no organization — ApiKeyStrategy mints a bare
 // { role } context for the runner, the proxy and the region proxy — so
@@ -53,6 +54,7 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
   ) {
     super(organizationService, organizationUserService)
   }
+  @WithInstrumentation('auth.organization_resource_action')
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest()
     if (this.handlerAllowsMachineResourceAccess(context, request.user)) {

@@ -22,6 +22,7 @@ import { JWT_REGEX } from './constants/jwt-regex.constant'
 import { TtlLruCache } from '../common/utils/ttl-lru-cache.util'
 import { recordApiModuleCacheAccess } from '../common/utils/cache-metrics.util'
 import { Singleflight } from '../common/utils/singleflight.util'
+import { WithInstrumentation } from '../common/decorators/otel.decorator'
 
 export type ApiKeyUserCache = {
   userId: string
@@ -51,6 +52,7 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
     this.logger.log('ApiKeyStrategy initialized')
   }
 
+  @WithInstrumentation('auth.api_key_validate')
   async validate(token: string): Promise<AuthContextType | null> {
     return this.validationSingleflight.run(generateApiKeyHash(token), () => this.validateUncached(token))
   }
@@ -160,16 +162,19 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
     return this.configService.get('runnerAuthCache.enabled') !== false
   }
 
+  @WithInstrumentation('auth.api_key_lookup')
   async findApiKey(token: string): Promise<ApiKey> {
     return this.readApiKey(generateApiKeyHash(token), () => this.apiKeyService.getApiKeyByValue(token))
   }
 
+  @WithInstrumentation('auth.api_key_hash_lookup')
   async findApiKeyByHash(keyHash: string): Promise<ApiKey> {
     return this.readApiKey(keyHash, () => this.apiKeyService.getApiKeyByHash(keyHash))
   }
 
   private async readApiKey(keyHash: string, loader: () => Promise<ApiKey>): Promise<ApiKey> {
     let apiKey = await this.getApiKeyCache(keyHash)
+    recordApiModuleCacheAccess('api_key', apiKey ? 'hit' : 'miss')
     if (!apiKey) {
       apiKey = await loader()
       this.logger.debug(`API key found for userId: ${apiKey.userId}`)
@@ -185,8 +190,10 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
     return apiKey
   }
 
+  @WithInstrumentation('auth.user_lookup')
   async findUser(userId: string): Promise<ApiKeyUserCache | null> {
     let userCache = await this.getUserCache(userId)
+    recordApiModuleCacheAccess('api_key_user', userCache ? 'hit' : 'miss')
     if (userCache) return userCache
 
     const user = await this.userService.findOne(userId)

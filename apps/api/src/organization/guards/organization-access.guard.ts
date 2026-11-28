@@ -14,6 +14,7 @@ import Redis from 'ioredis'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationUser } from '../entities/organization-user.entity'
 import { OrganizationAccessCache } from '../services/organization-access-cache.service'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 @Injectable()
 export class OrganizationAccessGuard implements CanActivate {
@@ -26,6 +27,7 @@ export class OrganizationAccessGuard implements CanActivate {
     private readonly organizationUserService: OrganizationUserService,
   ) {}
 
+  @WithInstrumentation('auth.organization_access')
   async canActivate(context: ExecutionContext, currentPermissions = false): Promise<boolean> {
     const request = context.switchToHttp().getRequest()
     // TODO: initialize authContext safely

@@ -564,6 +564,7 @@ export class BoxService {
     }
   }
 
+  @WithInstrumentation('box.warm_pool_claim')
   private async assignWarmPoolBox(
     warmPoolBox: Box,
     createBoxDto: CreateBoxDto,

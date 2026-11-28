@@ -12,6 +12,8 @@ import { AuditContext } from '../decorators/audit.decorator'
 import { AuditAction } from '../enums/audit-action.enum'
 import { AuditTarget } from '../enums/audit-target.enum'
 import { AuditInterceptor } from './audit.interceptor'
+import { trace, SpanStatusCode } from '@opentelemetry/api'
+import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { AdminOrganizationNestedVirtualizationController } from '../../admin/controllers/organization-nested-virtualization.controller'
 
@@ -270,5 +272,36 @@ describe('AuditInterceptor', () => {
       }),
       expect.any(Number),
     )
+  })
+
+  it('measures audit preparation separately from a failing downstream handler', async () => {
+    const exporter = new InMemorySpanExporter()
+    trace.setGlobalTracerProvider(
+      new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] }),
+    )
+    const auditContext: AuditContext = { action: AuditAction.CREATE, targetType: AuditTarget.BOX }
+    const auditService = {
+      createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+      updateLog: jest.fn().mockResolvedValue(undefined),
+    }
+    const interceptor = new AuditInterceptor({ get: () => auditContext } as any, auditService as any)
+    const request = {
+      url: '/boxes',
+      user: { userId: 'user-1', email: 'user@example.com', organizationId: 'org-1' },
+      get: jest.fn(),
+    }
+    const executionContext = {
+      getHandler: jest.fn(),
+      switchToHttp: () => ({ getRequest: () => request, getResponse: () => ({ statusCode: 500 }) }),
+    } as unknown as ExecutionContext
+    const failure = new Error('handler failed')
+
+    await expect(
+      firstValueFrom(interceptor.intercept(executionContext, { handle: () => throwError(() => failure) })),
+    ).rejects.toBe(failure)
+
+    const span = exporter.getFinishedSpans().find((span) => span.name === 'audit.request_prepare')
+    expect(span?.attributes).toMatchObject({ 'audit.async_writes': false })
+    expect(span?.status.code).toBe(SpanStatusCode.OK)
   })
 })

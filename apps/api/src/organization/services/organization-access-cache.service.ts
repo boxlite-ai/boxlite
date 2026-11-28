@@ -6,6 +6,8 @@
 import { Logger } from '@nestjs/common'
 import Redis from 'ioredis'
 import { Singleflight } from '../../common/utils/singleflight.util'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
+import { recordApiModuleCacheAccess } from '../../common/utils/cache-metrics.util'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationUser } from '../entities/organization-user.entity'
 
@@ -114,13 +116,16 @@ export class OrganizationAccessCache {
     await invalidateOrganizationAccessCache(this.redis, organizationId)
   }
 
+  @WithInstrumentation('organization.access_cache_read')
   private async read<T>(
     cacheKey: string,
     ttlSeconds: number,
     loader: () => Promise<T | null>,
     parse: (raw: string) => T,
   ): Promise<T | null> {
+    const cacheName = cacheKey.startsWith('organization-user:') ? 'organization_membership' : 'organization'
     const cached = await this.redis.get(cacheKey)
+    recordApiModuleCacheAccess(cacheName, cached === null ? 'miss' : 'hit')
     if (cached !== null) return parse(cached)
 
     const generation = (await this.redis.get(generationKey(cacheKey))) ?? '0'
