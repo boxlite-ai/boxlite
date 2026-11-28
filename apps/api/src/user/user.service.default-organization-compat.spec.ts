@@ -25,7 +25,7 @@ describe('UserService default organization compatibility', () => {
     const dataSource = {
       transaction: jest.fn(async (callback) => callback(entityManager)),
     }
-    const service = new UserService({} as never, eventEmitter as never, dataSource as never)
+    const service = new UserService({} as never, eventEmitter as never, dataSource as never, {} as never)
 
     await service.create(
       {

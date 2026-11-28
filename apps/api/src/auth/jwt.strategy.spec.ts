@@ -11,6 +11,8 @@ import { UserService } from '../user/user.service'
 import { LoginEventRecorder } from './login-event.recorder'
 import { Context } from '../common/context/context'
 
+import { ReferralRegistrationException } from '../exceptions/referral-registration.exception'
+
 function buildStrategy(protectedRegistration = true) {
   const createdUser = { id: 'user-1', role: 'user', email: 'new@boxlite.dev' }
 
@@ -58,8 +60,54 @@ describe('JwtStrategy.validate — local account access', () => {
     expect(userService.create).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-1', email: 'new@boxlite.dev', defaultOrganizationDefaultRegionId: 'us' }),
       Context.user({ userId: 'user-1', authMethod: 'jwt' }),
+      undefined,
     )
     expect(loginEvents.recordFirstUse).toHaveBeenCalledWith('user-1', payload)
+  })
+
+  // The header name is pinned as a literal: OpenAPI publishes it to clients.
+  it('hands the raw referral header to account creation', async () => {
+    const { strategy, userService } = buildStrategy(false)
+    const request = {
+      get: jest.fn((name: string) => (name === 'X-BoxLite-Referral-Code' ? ' abcd2345ef ' : undefined)),
+    } as unknown as Request
+
+    await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
+
+    expect(userService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      Context.user({ userId: 'user-1', authMethod: 'jwt' }),
+      ' abcd2345ef ',
+    )
+  })
+
+  it('does not read the referral header for an existing account', async () => {
+    const { strategy, userService } = buildStrategy(false)
+    jest.mocked(userService.findOne).mockResolvedValue({
+      id: 'user-1',
+      name: 'Existing User',
+      email: 'new@boxlite.dev',
+      emailVerified: true,
+      role: 'user',
+    } as never)
+    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+
+    await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
+
+    expect(userService.create).not.toHaveBeenCalled()
+    expect(request.get).not.toHaveBeenCalledWith('X-BoxLite-Referral-Code')
+  })
+
+  it('refuses the request without recording a login when the referral is refused', async () => {
+    const { strategy, userService, loginEvents } = buildStrategy(false)
+    const refusal = new ReferralRegistrationException('invalid_referral_code')
+    jest.mocked(userService.create).mockRejectedValue(refusal)
+    const request = { get: jest.fn().mockReturnValue('ABCD2345EF') } as unknown as Request
+
+    await expect(
+      strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true }),
+    ).rejects.toBe(refusal)
+    expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
   })
 
   it.each([undefined, '', '   '])('rejects a new OIDC user without a registration email (%s)', async (email) => {

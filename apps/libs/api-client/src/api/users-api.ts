@@ -77,10 +77,11 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
         /**
          * 
          * @summary Get authenticated user
+         * @param {string} [xBoxLiteReferralCode] Referral code of the inviting organization; read only on the request that creates the account
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getAuthenticatedUser: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        getAuthenticatedUser: async (xBoxLiteReferralCode?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/users/me`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -101,6 +102,9 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
+            if (xBoxLiteReferralCode != null) {
+                localVarHeaderParameter['X-BoxLite-Referral-Code'] = String(xBoxLiteReferralCode);
+            }
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -329,11 +333,12 @@ export const UsersApiFp = function(configuration?: Configuration) {
         /**
          * 
          * @summary Get authenticated user
+         * @param {string} [xBoxLiteReferralCode] Referral code of the inviting organization; read only on the request that creates the account
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async getAuthenticatedUser(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<User>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getAuthenticatedUser(options);
+        async getAuthenticatedUser(xBoxLiteReferralCode?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<User>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getAuthenticatedUser(xBoxLiteReferralCode, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['UsersApi.getAuthenticatedUser']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -424,11 +429,12 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
         /**
          * 
          * @summary Get authenticated user
+         * @param {string} [xBoxLiteReferralCode] Referral code of the inviting organization; read only on the request that creates the account
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getAuthenticatedUser(options?: RawAxiosRequestConfig): AxiosPromise<User> {
-            return localVarFp.getAuthenticatedUser(options).then((request) => request(axios, basePath));
+        getAuthenticatedUser(xBoxLiteReferralCode?: string, options?: RawAxiosRequestConfig): AxiosPromise<User> {
+            return localVarFp.getAuthenticatedUser(xBoxLiteReferralCode, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -500,11 +506,12 @@ export class UsersApi extends BaseAPI {
     /**
      * 
      * @summary Get authenticated user
+     * @param {string} [xBoxLiteReferralCode] Referral code of the inviting organization; read only on the request that creates the account
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public getAuthenticatedUser(options?: RawAxiosRequestConfig) {
-        return UsersApiFp(this.configuration).getAuthenticatedUser(options).then((request) => request(this.axios, this.basePath));
+    public getAuthenticatedUser(xBoxLiteReferralCode?: string, options?: RawAxiosRequestConfig) {
+        return UsersApiFp(this.configuration).getAuthenticatedUser(xBoxLiteReferralCode, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
