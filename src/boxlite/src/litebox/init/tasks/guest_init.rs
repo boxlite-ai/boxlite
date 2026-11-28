@@ -581,6 +581,22 @@ mod tests {
         (result, calls.0, calls.1)
     }
 
+    fn bootstrap_for_create_missing_mount() -> GuestBootstrapConfig {
+        let mut bootstrap = bootstrap_for_version_gate();
+        if let Some(crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+            create_missing,
+            ..
+        }) = bootstrap
+            .container
+            .mounts
+            .first_mut()
+            .map(|mount| &mut mount.payload)
+        {
+            *create_missing = true;
+        }
+        bootstrap
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_guest_init_requires_safe_subpath_capability_before_any_init() {
         let (result, guest_calls, container_calls) = run_with_guest_version("0.14.0", false).await;
@@ -590,6 +606,31 @@ mod tests {
         let (result, guest_calls, container_calls) = run_with_guest_version("0.14.0", true).await;
         result.unwrap();
         assert_eq!((guest_calls, container_calls), (1, 1));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn create_missing_mounts_require_the_mount_options_guest_version_before_any_init() {
+        let old = guest_that("0.14.0", true);
+        let (result, served) = run_with_guest(old, bootstrap_for_create_missing_mount()).await;
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+        assert_eq!(
+            (
+                *served.guest_init_calls.lock().unwrap(),
+                *served.container_init_calls.lock().unwrap()
+            ),
+            (0, 0)
+        );
+
+        let current = guest_that("0.15.0", true);
+        let (result, served) = run_with_guest(current, bootstrap_for_create_missing_mount()).await;
+        result.unwrap();
+        assert_eq!(
+            (
+                *served.guest_init_calls.lock().unwrap(),
+                *served.container_init_calls.lock().unwrap()
+            ),
+            (1, 1)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

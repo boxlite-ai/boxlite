@@ -15,8 +15,12 @@ use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::vmm::{PreparedKernel, controller::VmmHandler};
 use crate::volumes::{ContainerMount, GuestVolumeManager, VolumeShare, classify_volume_share};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::sync::mpsc::{RecvTimeoutError, channel};
+use std::thread;
+use std::time::Duration;
 
 /// Switch between merged and overlayfs rootfs strategies.
 /// - true: overlayfs (allows COW writes, keeps layers separate)
@@ -30,6 +34,10 @@ pub const USE_OVERLAYFS: bool = true;
 /// Disk-based rootfs is faster to start but requires more disk space.
 /// When enabled, USE_OVERLAYFS is ignored.
 pub const USE_DISK_ROOTFS: bool = true;
+
+/// Cloud roots live behind FUSE/NFS. A backend that attaches and then wedges
+/// can leave an uninterruptible stat alive, so the caller must stop waiting.
+const CLOUD_PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub enum ResolvedShareKind {
@@ -97,6 +105,9 @@ pub fn resolve_user_volumes(
 
     for (i, vol) in volumes.iter().enumerate() {
         if let Some(selector) = &vol.managed_volume {
+            if vol.has_cloud_compat_marker() {
+                continue;
+            }
             let mount = managed_by_id.remove(selector).ok_or_else(|| {
                 BoxliteError::Internal(format!("volume {selector} was not resolved for boot"))
             })?;
@@ -133,12 +144,17 @@ pub fn resolve_user_volumes(
         // lstat intentionally rejects a missing root or a symlink root before
         // the guest resolver runs. Read-only preparation must not create it.
         let (source_path, kind, create_missing) = if vol.cloud_volume {
-            let metadata = host_path.symlink_metadata().map_err(|_| {
-                BoxliteError::NotFound(format!(
-                    "Cloud volume host path does not exist: {}",
-                    vol.host_path
-                ))
-            })?;
+            let probe_path = host_path.clone();
+            let metadata =
+                cloud_path_metadata_bounded(&host_path, CLOUD_PATH_PROBE_TIMEOUT, move || {
+                    probe_path.symlink_metadata()
+                })
+                .map_err(|_| {
+                    BoxliteError::NotFound(format!(
+                        "Cloud volume host path does not exist: {}",
+                        vol.host_path
+                    ))
+                })?;
             if !metadata.is_dir() {
                 return Err(BoxliteError::InvalidArgument(format!(
                     "Cloud volume host path is not a real directory: {}",
@@ -270,6 +286,42 @@ pub fn resolve_user_volumes(
     }
 
     Ok(resolved)
+}
+
+/// Run a cloud-backed path probe with a caller-visible deadline.
+///
+/// The kernel syscall cannot be interrupted, so on timeout the worker thread
+/// stays parked until FUSE/NFS answers. That leaked thread is preferable to
+/// parking box initialization behind a wedged backend.
+fn cloud_path_metadata_bounded<T>(
+    path: &Path,
+    timeout: Duration,
+    operation: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> BoxliteResult<T>
+where
+    T: Send + 'static,
+{
+    let (sender, receiver) = channel();
+    thread::spawn(move || {
+        let _ = sender.send(operation());
+    });
+
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => result.map_err(|_| {
+            BoxliteError::NotFound(format!(
+                "Cloud volume host path does not exist: {}",
+                path.display()
+            ))
+        }),
+        Err(RecvTimeoutError::Timeout) => Err(BoxliteError::Config(format!(
+            "VOLUME_PROBE_TIMEOUT: cannot inspect cloud path {} within {}ms",
+            path.display(),
+            timeout.as_millis()
+        ))),
+        Err(RecvTimeoutError::Disconnected) => Err(BoxliteError::Internal(
+            "cloud path probe worker closed without returning a result".into(),
+        )),
+    }
 }
 
 /// Result of rootfs preparation - either merged, separate layers, or disk image.
@@ -869,5 +921,19 @@ mod tests {
             reason.contains(&err_display),
             "error_reason should round-trip BoxliteError::Display; got {reason:?}"
         );
+    }
+    #[test]
+    fn cloud_path_metadata_bounded_times_out_a_wedged_backend() {
+        let error = cloud_path_metadata_bounded(
+            Path::new("/mnt/wedged-cloud"),
+            Duration::from_millis(10),
+            || {
+                thread::sleep(Duration::from_millis(50));
+                Ok(())
+            },
+        )
+        .expect_err("a timed-out cloud probe must fail");
+
+        assert!(error.to_string().contains("VOLUME_PROBE_TIMEOUT"));
     }
 }

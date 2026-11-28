@@ -340,7 +340,7 @@ fn build_path_access(
     // A managed volume names no host path, so there is nothing to grant; the
     // local runtime rejects one before boot anyway (`resolve_user_volumes`).
     for vol in volumes {
-        if vol.managed_volume.is_some() {
+        if vol.managed_volume.is_some() && !vol.has_cloud_compat_marker() {
             continue;
         }
         let p = PathBuf::from(&vol.host_path);

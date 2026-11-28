@@ -15,7 +15,14 @@ import { validateMountPaths, validateSubpaths } from './volume-mount-path-valida
 describe('validateMountPaths', () => {
   it.each([
     ['a managed volume', { volumeId: 'volume-123', mountPath: '/data' }],
-    ['a filestore volume', { volumeId: 'volume-123', mountPath: '/nfs', filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } }],
+    [
+      'a filestore volume',
+      {
+        volumeId: 'volume-123',
+        mountPath: '/nfs',
+        filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+      },
+    ],
     ['a managed volume with a subpath', { volumeId: 'volume-123', mountPath: '/data', subpath: 'users/alice' }],
   ])('accepts an absolute mount path on %s', (_label, volume: BoxVolume) => {
     expect(() => validateMountPaths([volume])).not.toThrow()
@@ -30,7 +37,11 @@ describe('validateMountPaths', () => {
     ['a system file', '/etc/passwd', 'cannot mount to system directory'],
     ['a directory under a system path', '/etc/nginx/conf', 'cannot mount to system directory'],
   ])('rejects %s', (_label, mountPath: string, message) => {
-    const volume: BoxVolume = { volumeId: 'volume-123', mountPath, filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } }
+    const volume: BoxVolume = {
+      volumeId: 'volume-123',
+      mountPath,
+      filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+    }
 
     expect(() => validateMountPaths([volume])).toThrow(message)
   })
@@ -39,8 +50,16 @@ describe('validateMountPaths', () => {
     expect(() =>
       validateMountPaths([
         { volumeId: 'volume-123', mountPath: '/data' },
-        { volumeId: 'volume-123', mountPath: 'relative', filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } },
-        { volumeId: 'volume-123', mountPath: '/proc', filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } },
+        {
+          volumeId: 'volume-123',
+          mountPath: 'relative',
+          filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+        },
+        {
+          volumeId: 'volume-123',
+          mountPath: '/proc',
+          filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+        },
       ]),
     ).toThrow('must be absolute')
     // toThrow checks the whole joined message; assert the second error is in
@@ -49,8 +68,16 @@ describe('validateMountPaths', () => {
     try {
       validateMountPaths([
         { volumeId: 'volume-123', mountPath: '/data' },
-        { volumeId: 'volume-123', mountPath: 'relative', filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } },
-        { volumeId: 'volume-123', mountPath: '/proc', filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } },
+        {
+          volumeId: 'volume-123',
+          mountPath: 'relative',
+          filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+        },
+        {
+          volumeId: 'volume-123',
+          mountPath: '/proc',
+          filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+        },
       ])
     } catch (error) {
       thrown = error
@@ -69,7 +96,6 @@ describe('validateSubpaths', () => {
   it('rejects separators, traversal, limits, and wrong types', () => {
     const cases = [
       '/team/backend',
-      'team/backend/',
       'team//backend',
       '.',
       '..',
@@ -84,6 +110,12 @@ describe('validateSubpaths', () => {
     for (const subpath of cases) {
       expect(() => validateSubpaths([{ volumeId: 'vol', mountPath: '/data', subpath } as any])).toThrow()
     }
+  })
+
+  it('normalizes one legacy trailing slash without changing the mount target', () => {
+    const volumes = [{ volumeId: 'vol', mountPath: '/data', subpath: 'team/backend/' }] as any
+    expect(() => validateSubpaths(volumes)).not.toThrow()
+    expect(volumes[0].subpath).toBe('team/backend')
   })
 
   it('allows exactly 64 components and 4096 bytes', () => {

@@ -6,7 +6,14 @@
 
 import { assertCpuAllocation } from '../utils/cpu-allocation'
 import { requestedMemoryMib } from '../utils/memory-allocation'
-import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ConflictException,
+  ServiceUnavailableException,
+} from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import {
   Not,
@@ -111,7 +118,7 @@ import { assertWithinPerBoxLimits } from './per-box-limits'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
 import {
-  adapterSupportsVolumeMountOptions,
+  probeVolumeMountOptions,
   requiresVolumeMountOptions,
   runnerSupportsVolumeMountOptions,
   VOLUME_MOUNT_OPTIONS_CAPABILITY,
@@ -1269,11 +1276,23 @@ export class BoxService {
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
-    if (requiresVolumeMountOptions(box.volumes) && !(await adapterSupportsVolumeMountOptions(runnerAdapter))) {
-      this.logger.warn(`Runner ${runner.id} cannot recover box ${box.id}: missing ${VOLUME_MOUNT_OPTIONS_CAPABILITY}`)
-      throw new ForbiddenException(
-        'VOLUME_MOUNT_OPTIONS_UNSUPPORTED: runner does not support readOnly or subpath mounts',
+    if (requiresVolumeMountOptions(box.volumes)) {
+      const probe = await probeVolumeMountOptions(
+        runnerAdapter,
+        this.configService.getOrThrow('runnerHealthTimeout') * 1000,
       )
+      if (probe.status === 'unsupported') {
+        this.logger.warn(`Runner ${runner.id} cannot recover box ${box.id}: missing ${VOLUME_MOUNT_OPTIONS_CAPABILITY}`)
+        throw new ForbiddenException(
+          'VOLUME_MOUNT_OPTIONS_UNSUPPORTED: runner does not support readOnly or subpath mounts',
+        )
+      }
+      if (probe.status === 'unavailable') {
+        this.logger.warn(
+          `Runner ${runner.id} mount-options probe failed; recovery remains retryable: ${probe.error.message}`,
+        )
+        throw new ServiceUnavailableException('VOLUME_MOUNT_OPTIONS_PROBE_UNAVAILABLE')
+      }
     }
 
     try {

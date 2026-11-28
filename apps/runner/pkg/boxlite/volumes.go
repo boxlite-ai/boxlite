@@ -38,7 +38,7 @@ const volumeMountTimeout = 90 * time.Second
 
 // Bound for the local mount probes and teardown. A wedged FUSE mount blocks
 // stat and umount indefinitely, which is exactly the state these run in.
-const volumeProbeTimeout = 10 * time.Second
+var volumeProbeTimeout = 10 * time.Second
 
 // Bound for the readiness loop as a whole. It has to be a deadline rather than
 // a retry count: each probe can now burn volumeProbeTimeout against a wedged
@@ -143,8 +143,11 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 
 	// Validate syntax for every volume before mounting any backend. A bad
 	// trailing volume must not leave backend roots or records from earlier
-	// volumes in the same Box request.
-	for _, volume := range volumes {
+	// volumes in the same Box request. Normalize first because one trailing
+	// slash was accepted by the original join and must keep restarting.
+	for i, volume := range volumes {
+		volume.Subpath = normalizeLegacySubPath(volume.Subpath)
+		volumes[i] = volume
 		if err := validateVolumeDTOShape(volume); err != nil {
 			return nil, err
 		}
@@ -207,7 +210,7 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 		// The FUSE mountpoint (outside the backend volume) is ready now. lstat
 		// rejects a symlink root or non-directory. Runner never joins subpath
 		// into hostPath: read-write creation is guest-side and descriptor-based.
-		if err := ensureCloudVolumeRoot(baseMountPath, "object storage volume root"); err != nil {
+		if err := ensureCloudVolumeRoot(ctx, baseMountPath, "object storage volume root"); err != nil {
 			c.logger.ErrorContext(
 				ctx, "Failed to prepare object storage volume",
 				"code", "VOLUME_ROOT_INVALID",
@@ -307,22 +310,25 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 	// This check happens before preparation writes. For read-only mounts it is
 	// the zero-write gate: missing, symlinked, or non-directory roots fail
 	// without MkdirAll or Chmod. A valid existing read-write root is reused.
-	if info, err := os.Lstat(dataDir); err == nil {
+	info, err := lstatBounded(ctx, dataDir)
+	if err == nil {
 		if !info.IsDir() {
 			return volumeMount{}, fmt.Errorf(
 				"VOLUME_SUBPATH_INVALID: filestore volume root %s is a symlink or not a directory",
 				dataDir,
 			)
 		}
-	} else if !os.IsNotExist(err) {
+	} else if os.IsNotExist(err) {
+		if vol.ReadOnly {
+			return volumeMount{}, fmt.Errorf(
+				"VOLUME_SUBPATH_NOT_FOUND: read-only filestore volume root %s does not exist",
+				dataDir,
+			)
+		}
+	} else {
 		return volumeMount{}, fmt.Errorf(
 			"VOLUME_SUBPATH_INVALID: cannot inspect filestore volume root %s: %w",
 			dataDir, err,
-		)
-	} else if vol.ReadOnly {
-		return volumeMount{}, fmt.Errorf(
-			"VOLUME_SUBPATH_NOT_FOUND: read-only filestore volume root %s does not exist",
-			dataDir,
 		)
 	}
 
@@ -402,7 +408,9 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 // recovery destroys the old Box. It may establish shared backend mounts, which
 // live outside the mounted volume, but it never writes volume data or records.
 func (c *Client) preflightRecoveryVolumes(ctx context.Context, volumes []dto.VolumeDTO) error {
-	for _, vol := range volumes {
+	for i, vol := range volumes {
+		vol.Subpath = normalizeLegacySubPath(vol.Subpath)
+		volumes[i] = vol
 		if err := validateVolumeDTOShape(vol); err != nil {
 			return err
 		}
@@ -416,10 +424,10 @@ func (c *Client) preflightRecoveryVolumes(ctx context.Context, volumes []dto.Vol
 			if err := c.ensureVolumeFuseMounted(ctx, volumeIdPrefixed, baseMountPath); err != nil {
 				return err
 			}
-			if err := ensureCloudVolumeRoot(baseMountPath, "object storage volume root"); err != nil {
+			if err := ensureCloudVolumeRoot(ctx, baseMountPath, "object storage volume root"); err != nil {
 				return err
 			}
-			if err := preflightVolumeSubPath(baseMountPath, subpath, vol.ReadOnly); err != nil {
+			if err := preflightVolumeSubPath(ctx, baseMountPath, subpath, vol.ReadOnly); err != nil {
 				return err
 			}
 			continue
@@ -455,16 +463,16 @@ func (c *Client) preflightRecoveryVolumes(ctx context.Context, volumes []dto.Vol
 		if !info.IsDir() {
 			return fmt.Errorf("VOLUME_ROOT_INVALID: filestore volume root %s is a symlink or not a directory", dataDir)
 		}
-		if err := preflightVolumeSubPath(dataDir, subpath, vol.ReadOnly); err != nil {
+		if err := preflightVolumeSubPath(ctx, dataDir, subpath, vol.ReadOnly); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func preflightVolumeSubPath(root, subPath string, readOnly bool) error {
+func preflightVolumeSubPath(ctx context.Context, root, subPath string, readOnly bool) error {
 	if subPath == "" {
-		info, err := os.Lstat(root)
+		info, err := lstatBounded(ctx, root)
 		if err != nil {
 			if os.IsNotExist(err) && readOnly {
 				return fmt.Errorf("VOLUME_SUBPATH_NOT_FOUND: volume root %s does not exist", root)
@@ -479,7 +487,7 @@ func preflightVolumeSubPath(root, subPath string, readOnly bool) error {
 	current := root
 	for _, component := range strings.Split(subPath, "/") {
 		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
+		info, err := lstatBounded(ctx, current)
 		if err != nil {
 			if os.IsNotExist(err) && !readOnly {
 				// RW may create the remainder after Create.
@@ -539,8 +547,8 @@ func validateCloudSubPath(subPath string) error {
 	return nil
 }
 
-func ensureCloudVolumeRoot(path string, label string) error {
-	info, err := os.Lstat(path)
+func ensureCloudVolumeRoot(ctx context.Context, path string, label string) error {
+	info, err := lstatBounded(ctx, path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("VOLUME_ROOT_NOT_FOUND: %s %s does not exist", label, path)
@@ -556,6 +564,55 @@ func ensureCloudVolumeRoot(path string, label string) error {
 func filestoreTarget(ref *dto.FilestoreRef) string {
 	return ref.Server + ":" + ref.Export
 }
+
+// normalizeLegacySubPath accepts the old one-trailing-slash spelling and
+// stores its equivalent clean relative path. The old join ignored the slash,
+// so an API upgrade must not turn a restartable box into VOLUME_SUBPATH_INVALID.
+// "a//" was always invalid and stays invalid.
+func normalizeLegacySubPath(subPath *string) *string {
+	if subPath == nil || *subPath == "" ||
+		strings.HasPrefix(*subPath, "/") ||
+		!strings.HasSuffix(*subPath, "/") ||
+		strings.HasSuffix(*subPath, "//") {
+		return subPath
+	}
+	clean := (*subPath)[:len(*subPath)-1]
+	return &clean
+}
+
+// lstatBounded gives cloud-backed paths the same bound as mount probes. The
+// syscall itself is uninterruptible on a wedged FUSE/NFS mount, so the caller
+// returns on the deadline while a leaked goroutine finishes whenever the
+// kernel releases it. That is still better than parking every operation for
+// the same Filestore instance behind one hung stat.
+func lstatBounded(ctx context.Context, path string) (os.FileInfo, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, volumeProbeTimeout)
+	defer cancel()
+
+	type lstatResult struct {
+		info os.FileInfo
+		err  error
+	}
+	done := make(chan lstatResult, 1)
+	go func() {
+		info, err := lstatPath(path)
+		done <- lstatResult{info: info, err: err}
+	}()
+
+	select {
+	case result := <-done:
+		return result.info, result.err
+	case <-probeCtx.Done():
+		err := probeCtx.Err()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("VOLUME_PROBE_TIMEOUT: cannot inspect %s within %s", path, volumeProbeTimeout)
+		}
+		return nil, fmt.Errorf("VOLUME_PROBE_CANCELLED: cannot inspect %s: %w", path, err)
+	}
+}
+
+// Replaced only by tests that inject a wedged backend path.
+var lstatPath = os.Lstat
 
 // filestoreDataDir derives the volume's data directory inside an instance's
 // NFS export: {mount root}/{volume_id}. Volumes are shared resources — boxes

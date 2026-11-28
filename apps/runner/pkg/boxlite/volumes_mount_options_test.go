@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 )
@@ -51,7 +52,7 @@ func TestCloudSubPathSyntaxAllowsPlainDotDotInsideNames(t *testing.T) {
 		}
 	}
 	for _, subpath := range []string{
-		"/team", "team/", ".", "..", "team/..", "a//b", "a\x00b", "team/../backend", strings.Repeat("a", 256),
+		"/team", ".", "..", "team/..", "a//b", "a\x00b", "team/../backend", strings.Repeat("a", 256),
 	} {
 		if err := validateCloudSubPath(subpath); err == nil {
 			t.Fatalf("validateCloudSubPath(%q) = nil, want an error", subpath)
@@ -59,7 +60,67 @@ func TestCloudSubPathSyntaxAllowsPlainDotDotInsideNames(t *testing.T) {
 	}
 }
 
+func TestNormalizeLegacySubPathKeepsOldTrailingSlashMountTarget(t *testing.T) {
+	if got := normalizeLegacySubPath(ptrTo("team/backend/")); got == nil || *got != "team/backend" {
+		t.Fatalf("normalizeLegacySubPath(team/backend/) = %#v, want team/backend", got)
+	}
+	if got := normalizeLegacySubPath(ptrTo("a//")); got == nil || *got != "a//" {
+		t.Fatalf("normalizeLegacySubPath(a//) = %#v, want a// unchanged and rejected later", got)
+	}
+	if got := normalizeLegacySubPath(ptrTo("team/backend")); got == nil || *got != "team/backend" {
+		t.Fatalf("normalizeLegacySubPath(team/backend) = %#v, want unchanged", got)
+	}
+	if got := normalizeLegacySubPath(nil); got != nil {
+		t.Fatalf("normalizeLegacySubPath(nil) = %#v, want nil", got)
+	}
+}
+
+func TestRecoveryPreflightNormalizesLegacyTrailingSlash(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
+	subdir := filepath.Join(root, "team", "backend")
+	if err := os.MkdirAll(subdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	c := filestoreTestClient(t)
+	installFakeFilestoreMounts(t, c)
+	legacy := "team/backend/"
+	volume := dto.VolumeDTO{
+		VolumeId:  "vol-1",
+		MountPath: "/data",
+		Subpath:   &legacy,
+		Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+	}
+
+	if err := c.preflightRecoveryVolumes(ctx, []dto.VolumeDTO{volume}); err != nil {
+		t.Fatalf("legacy trailing-slash recovery preflight failed: %v", err)
+	}
+}
+
+func TestLstatBoundedTimesOutWedgedCloudPath(t *testing.T) {
+	oldTimeout := volumeProbeTimeout
+	oldLstat := lstatPath
+	t.Cleanup(func() {
+		volumeProbeTimeout = oldTimeout
+		lstatPath = oldLstat
+	})
+	volumeProbeTimeout = 10 * time.Millisecond
+	lstatPath = func(string) (os.FileInfo, error) {
+		time.Sleep(50 * time.Millisecond)
+		return os.Stat("/definitely-not-inspected")
+	}
+
+	_, err := lstatBounded(context.Background(), "/mnt/wedged-cloud")
+	if err == nil || !strings.Contains(err.Error(), "VOLUME_PROBE_TIMEOUT") {
+		t.Fatalf("lstatBounded error = %v, want VOLUME_PROBE_TIMEOUT", err)
+	}
+}
+
 func TestCloudVolumeRootRejectsSymlinkAndFile(t *testing.T) {
+	ctx := context.Background()
 	base := t.TempDir()
 	real := filepath.Join(base, "real")
 	if err := os.Mkdir(real, 0755); err != nil {
@@ -74,11 +135,11 @@ func TestCloudVolumeRootRejectsSymlinkAndFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ensureCloudVolumeRoot(real, "volume root"); err != nil {
+	if err := ensureCloudVolumeRoot(ctx, real, "volume root"); err != nil {
 		t.Fatalf("real directory rejected: %v", err)
 	}
 	for _, path := range []string{link, file, filepath.Join(base, "missing")} {
-		err := ensureCloudVolumeRoot(path, "volume root")
+		err := ensureCloudVolumeRoot(ctx, path, "volume root")
 		if err == nil {
 			t.Fatalf("ensureCloudVolumeRoot(%q) = nil, want an error", path)
 		}
@@ -236,3 +297,5 @@ func TestFilestoreMountRootRejectsSymlink(t *testing.T) {
 		t.Fatalf("mount command ran %d times; symlink root must be rejected before mount", fake.mounts.Load())
 	}
 }
+
+func ptrTo(value string) *string { return &value }

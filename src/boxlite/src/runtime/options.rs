@@ -1043,6 +1043,7 @@ impl Default for RootfsSpec {
 /// boxes on disk carry a `host_path` key, so renaming the field — not the
 /// constructor — would strand every box written before such a rename.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VolumeSpec {
     /// Managed volume to mount, addressed by its server-assigned id **or** by
     /// its name — the server resolves either.
@@ -1053,7 +1054,8 @@ pub struct VolumeSpec {
     pub managed_volume: Option<String>,
 
     /// Host directory or file to bind into the box. Empty when
-    /// `managed_volume` is set.
+    /// `managed_volume` names a managed volume. Cloud mounts set an empty
+    /// compatibility marker instead; see [`VolumeSpec::cloud_bind_mount`].
     #[serde(default)]
     pub host_path: String,
 
@@ -1119,11 +1121,23 @@ impl VolumeSpec {
     ) -> Self {
         let sub_path = sub_path.into();
         Self {
+            // The empty marker makes an old runtime reject the persisted config
+            // as "both origins": it knows managed_volume and host_path but not
+            // sub_path/cloud_volume. Without it, rollback would ignore the new
+            // fields and mount the whole volume root.
+            managed_volume: Some(String::new()),
             read_only,
             sub_path: (!sub_path.is_empty()).then_some(sub_path),
             cloud_volume: true,
             ..Self::bind_mount(host_path, guest_path)
         }
+    }
+
+    /// True only for the internal empty marker written by
+    /// [`VolumeSpec::cloud_bind_mount`]. A caller-provided nonempty
+    /// managed_volume is never a cloud mount.
+    pub(crate) fn has_cloud_compat_marker(&self) -> bool {
+        self.cloud_volume && matches!(&self.managed_volume, Some(value) if value.is_empty())
     }
 
     /// Reject a mount that names no origin, both origins, or an empty one.
@@ -1132,7 +1146,7 @@ impl VolumeSpec {
     /// shape, so this runs at create rather than only in the constructors.
     pub fn validate(&self) -> BoxliteResult<()> {
         let guest_path = &self.guest_path;
-        if self.cloud_volume && self.managed_volume.is_some() {
+        if self.cloud_volume && !self.has_cloud_compat_marker() && self.managed_volume.is_some() {
             return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 format!("cloud volume mount {guest_path:?} cannot also set managed_volume"),
             ));
@@ -1144,14 +1158,15 @@ impl VolumeSpec {
                 ),
             ));
         }
+        let cloud_marker = self.has_cloud_compat_marker();
         match &self.managed_volume {
-            Some(volume) if !self.host_path.is_empty() => Err(
+            Some(volume) if !cloud_marker && !self.host_path.is_empty() => Err(
                 boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "volume mount {guest_path:?} sets both managed_volume ({volume:?}) and \
                      host_path; use exactly one"
                 )),
             ),
-            Some(volume) if volume.trim().is_empty() => Err(
+            Some(volume) if !cloud_marker && volume.trim().is_empty() => Err(
                 boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "volume mount {guest_path:?} has an empty managed_volume; pass a volume id \
                      or name"
@@ -1805,6 +1820,45 @@ mod tests {
         let capitalized = r#"{"type":"Volume","source":"run42","target":"/workspace"}"#;
         serde_json::from_str::<MountSpec>(capitalized)
             .expect_err("the persisted spelling is lowercase only");
+    }
+
+    /// Cloud mount fields are the persisted safety boundary. An old runtime
+    /// has neither field, so serde must refuse the unknown keys rather than
+    /// silently turning a subdirectory mount into a whole-root bind.
+    #[test]
+    fn cloud_volume_spec_is_versioned_by_unknown_field_rejection() {
+        let cloud = VolumeSpec::cloud_bind_mount("/mnt/cloud-root", "/data", "team/backend", true);
+        let json = serde_json::to_value(&cloud).unwrap();
+        assert_eq!(json["managed_volume"], "");
+        assert_eq!(json["host_path"], "/mnt/cloud-root");
+        assert_eq!(json["read_only"], true);
+        assert_eq!(json["sub_path"], "team/backend");
+        assert_eq!(json["cloud_volume"], true);
+        cloud
+            .validate()
+            .expect("the new runtime accepts its marker");
+
+        // Model the old runtime's schema: it never learned sub_path or
+        // cloud_volume, so serde drops them and its existing "both origins"
+        // validation must reject the remaining marker + host_path pair.
+        #[derive(serde::Deserialize)]
+        struct OldVolumeSpec {
+            #[serde(default)]
+            managed_volume: Option<String>,
+            #[serde(default)]
+            host_path: String,
+        }
+        let old: OldVolumeSpec = serde_json::from_value(json).unwrap();
+        assert!(old.managed_volume.is_some());
+        assert!(!old.host_path.is_empty());
+
+        let old_shape = r#"{"host_path":"/mnt/cloud-root","guest_path":"/data","read_only":true}"#;
+        let restored: VolumeSpec = serde_json::from_str(old_shape).unwrap();
+        assert!(!restored.cloud_volume);
+        assert!(restored.sub_path.is_none());
+
+        serde_json::from_str::<VolumeSpec>(r#"{"host_path":"/mnt/cloud-root","guest_path":"/data","read_only":true,"sub_path":"team/backend","cloud_volume":true,"future_runtime_field":true}"#)
+            .expect_err("a mount option this runtime does not understand must fail closed");
     }
 
     /// Boxes written before `mounts` existed have no such key in their config;

@@ -78,6 +78,19 @@ export function validateSubpaths(volumes: BoxVolume[]): void {
   const errors: string[] = []
 
   for (const volume of volumes) {
+    // A single trailing slash was accepted and effectively ignored by the
+    // original path join. Trim only that legacy spelling; "//" remains invalid
+    // because it was never equivalent to one empty component.
+    if (
+      typeof volume.subpath === 'string' &&
+      volume.subpath !== '' &&
+      !volume.subpath.startsWith('/') &&
+      volume.subpath.endsWith('/') &&
+      !volume.subpath.endsWith('//')
+    ) {
+      volume.subpath = volume.subpath.slice(0, -1)
+    }
+
     if (volume.readOnly !== undefined && typeof volume.readOnly !== 'boolean') {
       errors.push('Invalid readOnly (must be a boolean)')
     }

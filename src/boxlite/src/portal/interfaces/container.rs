@@ -184,7 +184,12 @@ impl ContainerInterface {
                     crate::volumes::ContainerMountPayload::ManagedSubDirectory {
                         sub_path,
                         create_missing,
-                    } => (BindMountKind::ManagedSubDirectory, sub_path, None, create_missing),
+                    } => (
+                        BindMountKind::ManagedSubDirectory,
+                        sub_path,
+                        None,
+                        create_missing,
+                    ),
                     // The runtime mounts the directory as it mounts a whole
                     // directory; the guest records that mount under the key.
                     crate::volumes::ContainerMountPayload::RecordedDirectory { key, added } => (
